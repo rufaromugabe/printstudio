@@ -30,6 +30,9 @@ type ScreenPackConfig struct {
 	LPI              float64
 	Gamma            float64
 	UnderbaseChokePX int
+	Screening        ScreeningMode
+	Angles           ScreenAngleSet
+	TrapPresetID     string
 }
 
 type GangConfig struct {
@@ -77,16 +80,30 @@ func BuildScreenFiles(src image.Image, config ScreenPackConfig) ([]ArtifactFile,
 	if config.Gamma <= 0 {
 		config.Gamma = 1
 	}
+	if config.Screening == "" {
+		config.Screening = ScreeningAM
+	}
+	if config.Angles == (ScreenAngleSet{}) {
+		config.Angles = DefaultScreenAngles()
+	}
+	if config.Screening == ScreeningAM {
+		if err := RejectScreenAngleConflicts(config.Angles); err != nil {
+			return nil, err
+		}
+	}
+	if config.Screening != ScreeningAM && config.Screening != ScreeningFM {
+		return nil, fmt.Errorf("unsupported screening mode %q", config.Screening)
+	}
 	separations := SeparateCMYK(src)
 	bands := []struct {
 		name  string
 		angle float64
 		mask  *image.Gray
 	}{
-		{"cyan", 15, separations.Cyan},
-		{"magenta", 75, separations.Magenta},
-		{"yellow", 0, separations.Yellow},
-		{"black", 45, separations.Black},
+		{"cyan", config.Angles.Cyan, separations.Cyan},
+		{"magenta", config.Angles.Magenta, separations.Magenta},
+		{"yellow", config.Angles.Yellow, separations.Yellow},
+		{"black", config.Angles.Black, separations.Black},
 	}
 	files := make([]ArtifactFile, 0, 10)
 	for _, band := range bands {
@@ -94,14 +111,23 @@ func BuildScreenFiles(src image.Image, config ScreenPackConfig) ([]ArtifactFile,
 		if err != nil {
 			return nil, fmt.Errorf("encode %s separation: %w", band.name, err)
 		}
-		screen := AMHalftoneCoverage(band.mask, HalftoneConfig{DPI: config.DPI, LPI: config.LPI, AngleDegrees: band.angle, Gamma: config.Gamma})
+		var screen *image.Gray
+		if config.Screening == ScreeningFM {
+			screen = FMHalftoneCoverage(band.mask, config.Gamma)
+		} else {
+			screen = AMHalftoneCoverage(band.mask, HalftoneConfig{DPI: config.DPI, LPI: config.LPI, AngleDegrees: band.angle, Gamma: config.Gamma})
+		}
 		halftone, err := EncodePNG(screen)
 		if err != nil {
 			return nil, fmt.Errorf("encode %s halftone: %w", band.name, err)
 		}
+		name := fmt.Sprintf("separations/%s-fm.png", band.name)
+		if config.Screening == ScreeningAM {
+			name = fmt.Sprintf("separations/%s-%.1fdeg-%.0flpi.png", band.name, band.angle, config.LPI)
+		}
 		files = append(files,
 			NewArtifact("separations/"+band.name+"-continuous.png", band.name+"-continuous", "image/png", continuous),
-			NewArtifact(fmt.Sprintf("separations/%s-%.1fdeg-%.0flpi.png", band.name, band.angle, config.LPI), band.name+"-halftone", "image/png", halftone),
+			NewArtifact(name, band.name+"-halftone", "image/png", halftone),
 		)
 	}
 	underbase := Underbase(src, UnderbaseConfig{SpreadPixels: config.UnderbaseChokePX})

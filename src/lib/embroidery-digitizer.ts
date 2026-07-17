@@ -5,15 +5,17 @@ export type DigitizerView={canvasWidth:number;canvasHeight:number;physicalWidthM
 export type Digitization={regions:EmbroideryRegion[];fallbacks:string[]};
 
 export async function digitizeElements(elements:DigitizerElement[],view:DigitizerView):Promise<Digitization>{
-  const regions:EmbroideryRegion[]=[],fallbacks:string[]=[];
+  const regions:EmbroideryRegion[]=[],failures:string[]=[];
   for(const element of elements){
     let rings:EmbroideryPoint[][]=[];
-    try{rings=await traceElement(element)}catch{fallbacks.push(element.id)}
-    if(!rings.length){rings=[[{x:0,y:0},{x:element.w,y:0},{x:element.w,y:element.h},{x:0,y:element.h}]];fallbacks.push(element.id)}
+    try{rings=await traceElement(element)}catch{failures.push(element.id);continue}
+    if(!rings.length){failures.push(element.id);continue}
     const polygons=groupRings(rings);
     polygons.forEach((polygon,index)=>{const autoSatin=element.type==="text"&&polygon.length<=2,kind=element.embroideryKind&&element.embroideryKind!=="auto"?element.embroideryKind:(autoSatin?"satin":"tatami"),underlay=element.embroideryUnderlay??"auto",satin=kind==="satin";regions.push({id:`${element.id}-${index}`,threadId:element.color||"#222222",geometry:{rings:polygon.map(r=>r.map(p=>toPhysical(p,element,view)))},kind,spacingMm:element.embroiderySpacing??.45,stitchLengthMm:3,angleDegrees:element.embroideryAngle??0,edgeUnderlay:underlay==="edge"||(underlay==="auto"&&!satin),centerUnderlay:underlay==="center-zigzag"||(underlay==="auto"&&satin),zigzagUnderlay:underlay==="center-zigzag"||(underlay==="auto"&&satin)})});
   }
-  return{regions,fallbacks:[...new Set(fallbacks)]};
+  if(failures.length)throw new Error(`${failures.length} layer(s) could not be traced into production contours. Re-upload artwork with CORS-readable pixels or convert to editable text/shapes — boundary rectangles are no longer accepted as a production fallback.`);
+  if(!regions.length)throw new Error("No production contours were produced from the design.");
+  return{regions,fallbacks:[]};
 }
 
 async function traceElement(element:DigitizerElement):Promise<EmbroideryPoint[][]>{

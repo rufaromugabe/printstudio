@@ -10,18 +10,29 @@ import (
 
 type NativeTools struct{ Vips, Potrace string }
 type Capabilities struct {
-	ICC             bool   `json:"icc"`
-	VectorTrace     bool   `json:"vectorTrace"`
-	VipsPath        string `json:"vipsPath"`
-	PotracePath     string `json:"potracePath"`
-	PolygonBoolean  bool   `json:"polygonBoolean"`
-	MaxRenderPixels int64  `json:"maxRenderPixels"`
+	ICC             bool         `json:"icc"`
+	VectorTrace     bool         `json:"vectorTrace"`
+	VipsPath        string       `json:"vipsPath"`
+	PotracePath     string       `json:"potracePath"`
+	PolygonBoolean  bool         `json:"polygonBoolean"`
+	MaxRenderPixels int64        `json:"maxRenderPixels"`
+	ScreeningModes  []string     `json:"screeningModes"`
+	TrapPresets     []TrapPreset `json:"trapPresets"`
+	NamedInks       []NamedInk   `json:"namedInks"`
+	ICCProfiles     bool         `json:"iccProfiles"`
+	QualityPolicy   string       `json:"qualityPolicy"`
 }
 
 func (n NativeTools) Probe() Capabilities {
 	v := resolve(n.Vips, "vips")
 	p := resolve(n.Potrace, "potrace")
-	return Capabilities{ICC: v != "", VectorTrace: p != "", VipsPath: v, PotracePath: p, PolygonBoolean: Clipper2Available()}
+	return Capabilities{
+		ICC: v != "", VectorTrace: p != "", VipsPath: v, PotracePath: p, PolygonBoolean: Clipper2Available(),
+		ScreeningModes: []string{string(ScreeningAM), string(ScreeningFM)},
+		TrapPresets:    TrapPresets(),
+		NamedInks:      DefaultNamedInks(),
+		QualityPolicy:  "fail-closed: no boundary fallbacks, no browser gang sheets, AM angle conflicts rejected, ICC required when requested",
+	}
 }
 func (n NativeTools) ICCTransform(ctx context.Context, input, output, sourceProfile, destinationProfile, stringIntent string) error {
 	v := resolve(n.Vips, "vips")

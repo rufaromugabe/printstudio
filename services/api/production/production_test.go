@@ -183,3 +183,81 @@ func TestBilinearScalePreservesColourAtTransparentEdges(t *testing.T) {
 		t.Fatalf("transparent-edge interpolation introduced a dark fringe: %#v", edge)
 	}
 }
+
+func TestFMHalftoneIsDeterministicAndMonotonic(t *testing.T) {
+	coverage := func(gray uint8) int {
+		img := image.NewGray(image.Rect(0, 0, 96, 96))
+		for i := range img.Pix {
+			img.Pix[i] = gray
+		}
+		out := FMHalftone(img, 1)
+		n := 0
+		for _, v := range out.Pix {
+			if v > 0 {
+				n++
+			}
+		}
+		again := FMHalftone(img, 1)
+		for i := range out.Pix {
+			if out.Pix[i] != again.Pix[i] {
+				t.Fatal("FM halftone is nondeterministic")
+			}
+		}
+		return n
+	}
+	dark, mid, light := coverage(0), coverage(128), coverage(240)
+	if !(dark > mid && mid > light) {
+		t.Fatalf("FM coverage not monotonic: %d %d %d", dark, mid, light)
+	}
+}
+
+func TestSpotMatchDeltaE(t *testing.T) {
+	match, err := MatchSpot("#C8102E", DefaultNamedInks(), 2)
+	if err != nil || match.Ink.ID != "spot-red" {
+		t.Fatalf("expected spot-red, got %#v err=%v", match, err)
+	}
+	if _, err := MatchSpot("#00FF00", DefaultNamedInks(), 1); err == nil {
+		t.Fatal("expected unmatched colour to fail closed")
+	}
+}
+
+func TestScreenAngleConflictDetection(t *testing.T) {
+	ok := DefaultScreenAngles()
+	if len(DetectScreenAngleConflicts(ok)) != 0 {
+		t.Fatal("default angles should not conflict")
+	}
+	bad := ScreenAngleSet{Cyan: 45, Magenta: 45, Yellow: 0, Black: 45}
+	if err := RejectScreenAngleConflicts(bad); err == nil {
+		t.Fatal("identical C/M/K angles must be rejected")
+	}
+}
+
+func TestTrapPresetLookup(t *testing.T) {
+	preset, err := LookupTrapPreset("dtf-pet-film-standard")
+	if err != nil || preset.SpreadPixels != 2 {
+		t.Fatalf("unexpected preset %#v err=%v", preset, err)
+	}
+}
+
+func TestICCProfileStoreRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewICCProfileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Minimal acsp signature at offset 36.
+	data := make([]byte, 128)
+	copy(data[36:40], []byte("acsp"))
+	meta, err := store.Put("srgb-test", "sRGB test", "unit", data)
+	if err != nil || meta.Version != 1 {
+		t.Fatalf("put failed: %#v %v", meta, err)
+	}
+	got, path, err := store.Get("srgb-test")
+	if err != nil || got.SHA256 != meta.SHA256 || path == "" {
+		t.Fatalf("get failed: %#v %v", got, err)
+	}
+	list, err := store.List()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list failed: %v %#v", err, list)
+	}
+}

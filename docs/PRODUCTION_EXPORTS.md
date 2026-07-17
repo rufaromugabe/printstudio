@@ -28,11 +28,9 @@ Current output:
 - Mirroring enabled by default and switchable in the review dialog
 - Multiple disconnected contours
 - Warning for details below 1 mm
-- Boundary-fallback disclosure when source pixels cannot be read
+- Clipper2 union cleanup is required; exports fail closed when `polygonBoolean` is unavailable
 
-Remaining specialist work includes path-union cleanup, overlap removal, automatic weed boxes, multi-colour registration marks and blade/material profiles.
-
-The API already exposes capability-gated Clipper2 Boolean and offset routes. Vinyl export must only switch from the current disclosed contour fallback after the CGO backend passes native deployment verification.
+Remaining specialist work includes automatic weed boxes refinements, multi-colour registration marks and blade/material profiles.
 
 ## Screen printing
 
@@ -88,8 +86,6 @@ Printer/paper ICC conversion and product-specific seam warping remain downstream
 
 1. Move single-artwork scene reconstruction to asynchronous server workers; the current server ownership covers packaging and gang-sheet pixel compositing, while the initial colour tile is still rendered in the browser at up to 36 megapixels.
 2. Add gang-sheet cut contours and multi-artwork irregular nesting.
-3. Activate geometric vinyl union/hole subtraction/blade compensation after the tagged Clipper2 build passes native verification.
-4. Add spot-colour Lab/DeltaE matching, trapping and named-ink libraries.
-5. Add managed ICC profile upload/versioning and apply libvips conversion only when the capability probe succeeds.
-6. Add sublimation panel splitting and product-specific seam templates.
-7. Add server-backed export history shared across devices and team members.
+3. Expand customer Pantone/Lab ink libraries and press-measured ΔE targets.
+4. Add sublimation panel splitting and product-specific seam templates.
+5. Add server-backed export history shared across devices and team members.

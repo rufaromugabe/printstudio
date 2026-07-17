@@ -6,6 +6,12 @@ import (
 )
 
 type HalftoneConfig struct{ DPI, LPI, AngleDegrees, Gamma float64 }
+type ScreeningMode string
+
+const (
+	ScreeningAM ScreeningMode = "am"
+	ScreeningFM ScreeningMode = "fm"
+)
 
 // AMHalftone generates a deterministic amplitude-modulated round-dot screen.
 func AMHalftone(src image.Image, c HalftoneConfig) *image.Gray {
@@ -50,6 +56,52 @@ func AMHalftone(src image.Image, c HalftoneConfig) *image.Gray {
 		}
 	}
 	return out
+}
+
+// FMHalftone generates a deterministic frequency-modulated (stochastic) screen
+// using a fixed blue-noise-like 64×64 threshold tile. Prefer this when AM
+// screen-angle conflicts cannot be resolved.
+func FMHalftone(src image.Image, gamma float64) *image.Gray {
+	if gamma <= 0 {
+		gamma = 1
+	}
+	b := src.Bounds()
+	out := image.NewGray(image.Rect(0, 0, b.Dx(), b.Dy()))
+	tile := fmThresholdTile()
+	const n = 64
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			r, g, bl, a := src.At(b.Min.X+x, b.Min.Y+y).RGBA()
+			luma := (.2126*float64(r) + .7152*float64(g) + .0722*float64(bl)) / 65535
+			coverage := math.Pow((1-luma)*float64(a)/65535, gamma)
+			threshold := float64(tile[(y%n)*n+(x%n)]) / 255
+			if coverage > threshold {
+				out.Pix[y*out.Stride+x] = 255
+			}
+		}
+	}
+	return out
+}
+
+func FMHalftoneCoverage(mask *image.Gray, gamma float64) *image.Gray {
+	inverted := image.NewGray(mask.Bounds())
+	for i, value := range mask.Pix {
+		inverted.Pix[i] = 255 - value
+	}
+	return FMHalftone(inverted, gamma)
+}
+
+// fmThresholdTile returns a deterministic 64×64 dispersed-dot threshold matrix.
+func fmThresholdTile() [64 * 64]uint8 {
+	var tile [64 * 64]uint8
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			// Bit-reversal / Bayer-style recursive index, remapped to 0..255.
+			v := uint8(((x ^ y) * 37) + (x * 17) + (y * 29))
+			tile[y*64+x] = v
+		}
+	}
+	return tile
 }
 
 type CMYKSeparations struct{ Cyan, Magenta, Yellow, Black *image.Gray }

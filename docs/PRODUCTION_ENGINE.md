@@ -18,18 +18,18 @@ The Go production engine is the authoritative prepress layer. Browser output rem
 
 This avoids the shape bias introduced by repeated square or cross kernels.
 
-### AM halftone screening
+### AM and FM screening
 
-`production/halftone.go` generates deterministic rotated round-dot screens.
+`production/halftone.go` generates deterministic rotated round-dot AM screens and a stochastic FM screen.
 
-- Configurable DPI
-- Configurable LPI
-- Configurable screen angle
-- Configurable tone gamma
+- Configurable DPI / LPI / screen angle / tone gamma for AM
+- FM mode uses a fixed dispersed-dot threshold tile (no angle set required)
 - Alpha-aware coverage
 - Monotonic tone coverage tests
 
-Default studio action: 300 DPI, 45 LPI, 22.5 degrees.
+Default studio AM action: 300 DPI, 45 LPI, 22.5 degrees.
+
+Screen-angle conflict detection rejects colliding AM sets before packaging.
 
 ### CMYK separations
 
@@ -85,9 +85,14 @@ Authenticated routes:
 GET  /v1/production/capabilities
 POST /v1/production/dtf/underbase?spread=2&threshold=1
 POST /v1/production/dtf/pack
-POST /v1/production/screen/halftone?dpi=300&lpi=45&angle=22.5&gamma=1
+POST /v1/production/screen/halftone?dpi=300&lpi=45&angle=22.5&gamma=1&mode=am|fm
 POST /v1/production/screen/cmyk
 POST /v1/production/screen/pack
+POST /v1/production/screen/angles
+POST /v1/production/spot/match
+GET  /v1/production/icc/profiles
+POST /v1/production/icc/profiles?id=&label=
+POST /v1/production/icc/transform?sourceProfile=&destinationProfile=&intent=
 POST /v1/production/gang/nest
 POST /v1/production/gang/render
 POST /v1/production/vector/boolean
@@ -95,6 +100,8 @@ POST /v1/production/vector/offset
 ```
 
 Raster requests accept PNG or JPEG bodies up to 50 MB and reject decoded images above 100 megapixels.
+
+Set `ICC_PROFILE_DIR` to enable profile upload/versioning. ICC transforms require both that store and a resolvable `vips` binary (`VIPS_BIN`).
 
 ## Verification
 
@@ -118,9 +125,7 @@ The test suite covers:
 ## Remaining moat work
 
 1. Compile the tagged Clipper2 backend in a CGO-capable CI runner and add adversarial geometry, fuzz and native leak tests.
-2. Install libvips/LittleCMS in production images and test with real printer profiles.
-3. Add ICC-profile administration, validation and versioning.
-4. Add spot-colour Lab/DeltaE matching and named-ink libraries.
-5. Add underbase choke/trap presets calibrated per printer, ink and film.
-6. Add stochastic/FM screening and multi-angle screen-set conflict detection.
-7. Feed measured print results into versioned production profiles.
+2. Install libvips/LittleCMS in production images and load real printer ICC profiles into `ICC_PROFILE_DIR`.
+3. Expand the named-ink library with customer Pantone/Lab libraries and press-measured ΔE targets.
+4. Add measured print feedback into versioned trap presets and production profiles.
+5. Add sublimation panel splitting and product-specific seam templates.

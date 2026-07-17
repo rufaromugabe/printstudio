@@ -1,3 +1,4 @@
+import { api, PolygonPaths } from "./api";
 import { digitizeElements, DigitizerElement, DigitizerView } from "./embroidery-digitizer";
 
 type ExportElement=DigitizerElement&{assetId?:string;sourceWidth?:number;sourceHeight?:number;textAlign?:"left"|"center"|"right";lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean};
@@ -7,6 +8,7 @@ export type ProductionResult={method:ProductionMethod;blob:Blob;fileName:string;
 export async function prepareProductionExport(method:ProductionMethod,name:string,elements:ExportElement[],view:DigitizerView&{bleedMm?:number},mirrorVinyl=true):Promise<ProductionResult>{
   if(!elements.length)throw new Error("Add at least one design element before exporting.");
   const clean=safeName(name),warnings:string[]=[];
+  const capabilities=await api.productionCapabilities().catch(()=>null);
   if(method==="DTF"||method==="Sublimation"){
     const bleed=method==="Sublimation"?(view.bleedMm??3):0,dpi=300,widthMM=view.physicalWidthMm+bleed*2,heightMM=view.physicalHeightMm+bleed*2,pixelWidth=Math.ceil(widthMM/25.4*dpi),pixelHeight=Math.ceil(heightMM/25.4*dpi);
     if(pixelWidth*pixelHeight>36_000_000)throw new Error("Production canvas exceeds the safe 36-megapixel browser limit. Reduce the print area or export through a rendering worker.");
@@ -14,13 +16,47 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     if(method==="Sublimation"&&!coversCanvas(elements,view))warnings.push("Artwork does not cover the full bleed area; unprinted edges may appear after pressing.");
     const blob=await renderPNG(elements,view,pixelWidth,pixelHeight,bleed);return{method,blob,fileName:`${clean}-${method.toLowerCase().replace(" ","-")}-300dpi.png`,mime:"image/png",previewUrl:URL.createObjectURL(blob),summary:`${pixelWidth} × ${pixelHeight}px at 300 DPI${bleed?` with ${bleed} mm bleed`:""}`,warnings,widthMM,heightMM,pixelWidth,pixelHeight};
   }
-  const traced=await digitizeElements(elements,view);if(traced.fallbacks.length)warnings.push(`${traced.fallbacks.length} layer(s) used boundary fallback because their pixels could not be read.`);
+  const traced=await digitizeElements(elements,view);
   if(method==="Vinyl"){
-    const paths=[...new Set(traced.regions.map(r=>ringsPath(r.geometry.rings,view)))];const tiny=traced.regions.filter(r=>{const p=r.geometry.rings.flat(),xs=p.map(q=>q.x),ys=p.map(q=>q.y);return Math.min(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys))<1}).length;if(tiny)warnings.push(`${tiny} contour(s) contain details under 1 mm that may weed poorly.`);
-    const transform=mirrorVinyl?`translate(${view.physicalWidthMm} 0) scale(-1 1)`:"",weed=`<rect id="weed-box" x="0.5" y="0.5" width="${Math.max(0,view.physicalWidthMm-1)}" height="${Math.max(0,view.physicalHeightMm-1)}" fill="none" stroke="#000" stroke-width="0.15"/>`;const svg=svgEnvelope(view,`<g fill="none" stroke="#000" stroke-width="0.15" fill-rule="evenodd" transform="${transform}">${paths.map(d=>`<path d="${d}"/>`).join("")}</g>${weed}`);const blob=new Blob([svg],{type:"image/svg+xml"});return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${paths.length} cleaned paths · weed box`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm};
+    if(!capabilities?.polygonBoolean)throw new Error("Vinyl cut paths require the Clipper2 production backend. Rebuild the API with -tags clipper2 and CGO_ENABLED=1 — approximate contour exports are disabled.");
+    const cleaned=await cleanVinylPaths(traced.regions.map(r=>r.geometry.rings),view);
+    const tiny=cleaned.filter(path=>{const xs=path.map(p=>p.x),ys=path.map(p=>p.y);return Math.min(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys))<1}).length;
+    if(tiny)warnings.push(`${tiny} contour(s) contain details under 1 mm that may weed poorly.`);
+    const paths=cleaned.map(path=>pathToSVG(path));
+    const transform=mirrorVinyl?`translate(${view.physicalWidthMm} 0) scale(-1 1)`:"";
+    const weed=`<rect id="weed-box" x="0.5" y="0.5" width="${Math.max(0,view.physicalWidthMm-1)}" height="${Math.max(0,view.physicalHeightMm-1)}" fill="none" stroke="#000" stroke-width="0.15"/>`;
+    const svg=svgEnvelope(view,`<g fill="none" stroke="#000" stroke-width="0.15" fill-rule="evenodd" transform="${transform}">${paths.map(d=>`<path d="${d}"/>`).join("")}</g>${weed}`);
+    const blob=new Blob([svg],{type:"image/svg+xml"});
+    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${paths.length} paths · weed box`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm};
   }
-  const colors=[...new Set(traced.regions.map(r=>r.threadId))];if(colors.length>8)warnings.push(`${colors.length} colours create ${colors.length} screen separations; consider reducing the palette.`);if(elements.some(e=>e.type==="image"))warnings.push("Raster artwork is exported as traced solid silhouettes; halftone separations require the later RIP pass.");const groups=colors.map((color,i)=>`<g id="separation-${i+1}" data-ink="${escapeXML(color)}" fill="${validColor(color)}" fill-rule="evenodd">${traced.regions.filter(r=>r.threadId===color).map(r=>`<path d="${ringsPath(r.geometry.rings,view)}"/>`).join("")}</g>`).join("");const svg=svgEnvelope(view,groups);const blob=new Blob([svg],{type:"image/svg+xml"});return{method,blob,fileName:`${clean}-screen-separations.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Layered screen-print SVG · ${colors.length} ink separation${colors.length===1?"":"s"}`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm};
+  const colors=[...new Set(traced.regions.map(r=>r.threadId))];
+  if(colors.length>8)warnings.push(`${colors.length} colours create ${colors.length} screen separations; consider reducing the palette.`);
+  if(elements.some(e=>e.type==="image"))warnings.push("Raster artwork is exported as traced solid silhouettes; use Screen Pack ZIP for AM/FM halftone separations.");
+  try{
+    const matches=await api.productionSpotMatch(colors,6);
+    warnings.push(`Spot library matched ${matches.matches.length} colour(s) within ΔE00 ≤ 6.`);
+  }catch(error){
+    warnings.push(error instanceof Error?error.message:"Spot-colour matching failed for one or more inks.");
+  }
+  const groups=colors.map((color,i)=>`<g id="separation-${i+1}" data-ink="${escapeXML(color)}" fill="${validColor(color)}" fill-rule="evenodd">${traced.regions.filter(r=>r.threadId===color).map(r=>ringsPath(r.geometry.rings,view)).map(d=>`<path d="${d}"/>`).join("")}</g>`).join("");
+  const svg=svgEnvelope(view,groups);const blob=new Blob([svg],{type:"image/svg+xml"});
+  return{method,blob,fileName:`${clean}-screen-separations.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Layered screen-print SVG · ${colors.length} ink separation${colors.length===1?"":"s"}`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm};
 }
+
+async function cleanVinylPaths(ringsList:{x:number;y:number}[][][],view:DigitizerView):Promise<PolygonPaths>{
+  const absolute:PolygonPaths=ringsList.flatMap(rings=>rings.map(ring=>ring.map(p=>({x:p.x+view.physicalWidthMm/2,y:p.y+view.physicalHeightMm/2}))));
+  if(!absolute.length)throw new Error("No vinyl contours were produced.");
+  let merged:PolygonPaths=[absolute[0]];
+  for(let i=1;i<absolute.length;i++){
+    const result=await api.productionBoolean(merged,[absolute[i]],"union");
+    merged=result.paths;
+  }
+  // Zero-offset round join normalizes self-intersections through Clipper2 without inventing blade compensation.
+  const normalized=await api.productionOffset(merged,0,"round");
+  return normalized.paths;
+}
+
+function pathToSVG(path:{x:number;y:number}[]){return path.map((p,i)=>`${i?"L":"M"}${p.x.toFixed(3)} ${p.y.toFixed(3)}`).join(" ")+" Z"}
 
 async function renderPNG(elements:ExportElement[],view:DigitizerView,width:number,height:number,bleed:number){const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;const ctx=canvas.getContext("2d");if(!ctx)throw new Error("Canvas renderer unavailable");const sx=(width-2*bleed/25.4*300)/view.canvasWidth,sy=(height-2*bleed/25.4*300)/view.canvasHeight,offset=bleed/25.4*300;
   for(const e of elements){ctx.save();ctx.translate(offset+(e.x+e.w/2)*sx,offset+(e.y+e.h/2)*sy);ctx.rotate(e.rotation*Math.PI/180);if(e.type==="image"){const image=await loadImage(e.value);ctx.drawImage(image,-e.w*sx/2,-e.h*sy/2,e.w*sx,e.h*sy)}else{drawText(ctx,e,sx,sy)}ctx.restore()}return await new Promise<Blob>((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error("PNG encoding failed")),"image/png"))}

@@ -18,6 +18,8 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	prod "printstudio/api/production"
 )
 
 //go:embed migrations/*.sql
@@ -76,6 +78,13 @@ func main() {
 		log.Fatalf("object storage unavailable: %v", err)
 	}
 	api := &API{db: db, maxDesigns: 100, objects: objects}
+	if dir := strings.TrimSpace(os.Getenv("ICC_PROFILE_DIR")); dir != "" {
+		store, err := prod.NewICCProfileStore(dir)
+		if err != nil {
+			log.Fatalf("ICC profile store: %v", err)
+		}
+		iccProfiles = store
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) { write(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /health/ready", api.ready)
@@ -103,6 +112,11 @@ func main() {
 	mux.Handle("POST /v1/production/screen/halftone", api.auth(http.HandlerFunc(productionHalftone)))
 	mux.Handle("POST /v1/production/screen/cmyk", api.auth(http.HandlerFunc(productionCMYK)))
 	mux.Handle("POST /v1/production/screen/pack", api.auth(http.HandlerFunc(productionScreenPack)))
+	mux.Handle("POST /v1/production/screen/angles", api.auth(http.HandlerFunc(productionAngleCheck)))
+	mux.Handle("POST /v1/production/spot/match", api.auth(http.HandlerFunc(productionSpotMatch)))
+	mux.Handle("GET /v1/production/icc/profiles", api.auth(http.HandlerFunc(listICCProfiles)))
+	mux.Handle("POST /v1/production/icc/profiles", api.auth(api.requireRole("admin", http.HandlerFunc(uploadICCProfile))))
+	mux.Handle("POST /v1/production/icc/transform", api.auth(http.HandlerFunc(applyICCTransform)))
 	mux.Handle("POST /v1/production/gang/nest", api.auth(http.HandlerFunc(productionNest)))
 	mux.Handle("POST /v1/production/gang/render", api.auth(http.HandlerFunc(productionGangRender)))
 	mux.Handle("POST /v1/production/vector/boolean", api.auth(http.HandlerFunc(productionBoolean)))

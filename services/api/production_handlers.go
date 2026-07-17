@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -11,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +26,7 @@ func productionCapabilities(w http.ResponseWriter, _ *http.Request) {
 	tools := prod.NativeTools{Vips: os.Getenv("VIPS_BIN"), Potrace: os.Getenv("POTRACE_BIN")}
 	capabilities := tools.Probe()
 	capabilities.MaxRenderPixels = productionMaxPixels()
+	capabilities.ICCProfiles = iccProfiles != nil
 	write(w, http.StatusOK, capabilities)
 }
 func productionUnderbase(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +49,19 @@ func productionDTFPack(w http.ResponseWriter, r *http.Request) {
 	}
 	spread := integerQuery(r, "spread", 2)
 	threshold := integerQuery(r, "threshold", 1)
+	if presetID := strings.TrimSpace(r.URL.Query().Get("trapPreset")); presetID != "" {
+		preset, err := prod.LookupTrapPreset(presetID)
+		if err != nil {
+			problem(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if preset.Method != "DTF" {
+			problem(w, http.StatusUnprocessableEntity, "trap preset is not a DTF recipe")
+			return
+		}
+		spread = preset.SpreadPixels
+		threshold = int(preset.Threshold)
+	}
 	if spread < -100 || spread > 100 || threshold < 1 || threshold > 255 {
 		problem(w, http.StatusUnprocessableEntity, "DTF spread must be between -100 and 100 pixels and threshold between 1 and 255")
 		return
@@ -60,13 +76,13 @@ func productionDTFPack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metadata := productionMetadata(r, src.Bounds())
-	metadata["underbase"] = map[string]any{"algorithm": "exact-euclidean-distance-transform", "spreadPixels": spread, "threshold": threshold}
+	metadata["underbase"] = map[string]any{"algorithm": "exact-euclidean-distance-transform", "spreadPixels": spread, "threshold": threshold, "trapPreset": r.URL.Query().Get("trapPreset")}
 	metadata["warning"] = "Final ink limits, white density and printer-specific RIP settings must be verified by the operator."
 	writeProductionArchive(w, safeProductionName(r.URL.Query().Get("name"))+"-dtf-package.zip", "DTF", files, metadata)
 }
 
 func productionScreenPack(w http.ResponseWriter, r *http.Request) {
-	_, src, ok := decodeProductionPNG(w, r)
+	data, src, ok := decodeProductionPNG(w, r)
 	if !ok {
 		return
 	}
@@ -74,6 +90,23 @@ func productionScreenPack(w http.ResponseWriter, r *http.Request) {
 	lpi := numberQuery(r, "lpi", 45)
 	gamma := numberQuery(r, "gamma", 1)
 	choke := integerQuery(r, "underbaseChoke", -2)
+	screening := prod.ScreeningMode(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("screening"))))
+	if screening == "" {
+		screening = prod.ScreeningAM
+	}
+	angles := prod.DefaultScreenAngles()
+	if presetID := strings.TrimSpace(r.URL.Query().Get("trapPreset")); presetID != "" {
+		preset, err := prod.LookupTrapPreset(presetID)
+		if err != nil {
+			problem(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if preset.Method != "Screen print" {
+			problem(w, http.StatusUnprocessableEntity, "trap preset is not a screen-print recipe")
+			return
+		}
+		choke = preset.UnderbaseChokePX
+	}
 	if dpi < 72 || dpi > 1200 || lpi < 10 || lpi > 200 || lpi > dpi/2 || gamma < 0.1 || gamma > 5 || choke < -100 || choke > 100 {
 		problem(w, http.StatusUnprocessableEntity, "invalid screen-pack DPI, LPI, gamma or underbase choke")
 		return
@@ -82,14 +115,45 @@ func productionScreenPack(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	files, err := prod.BuildScreenFiles(src, prod.ScreenPackConfig{DPI: dpi, LPI: lpi, Gamma: gamma, UnderbaseChokePX: choke})
+	calibratedPNG := data
+	var iccMeta map[string]any
+	if requireTruthy(r, "requireIcc") || r.URL.Query().Get("sourceProfile") != "" || r.URL.Query().Get("destinationProfile") != "" {
+		transformed, meta, err := applyProductionICC(r.Context(), data, r.URL.Query().Get("sourceProfile"), r.URL.Query().Get("destinationProfile"), r.URL.Query().Get("intent"))
+		if err != nil {
+			status := http.StatusUnprocessableEntity
+			if strings.Contains(err.Error(), "unavailable") {
+				status = http.StatusNotImplemented
+			}
+			problem(w, status, err.Error())
+			return
+		}
+		calibratedPNG = transformed
+		decoded, err := png.Decode(bytes.NewReader(calibratedPNG))
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "ICC-transformed PNG could not be decoded")
+			return
+		}
+		src = decoded
+		iccMeta = meta
+	}
+	files, err := prod.BuildScreenFiles(src, prod.ScreenPackConfig{DPI: dpi, LPI: lpi, Gamma: gamma, UnderbaseChokePX: choke, Screening: screening, Angles: angles, TrapPresetID: r.URL.Query().Get("trapPreset")})
 	if err != nil {
-		problem(w, http.StatusInternalServerError, "screen package generation failed")
+		problem(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	if iccMeta != nil {
+		files = append([]prod.ArtifactFile{prod.NewArtifact("color-icc.png", "icc-calibrated-artwork", "image/png", calibratedPNG)}, files...)
+	}
 	metadata := productionMetadata(r, src.Bounds())
-	metadata["screen"] = map[string]any{"model": "uncalibrated-cmyk-gcr", "dpi": dpi, "lpi": lpi, "gamma": gamma, "anglesDegrees": map[string]float64{"cyan": 15, "magenta": 75, "yellow": 0, "black": 45}, "underbaseChokePixels": choke}
-	metadata["warning"] = "These process separations are not ICC calibrated. Confirm mesh, dot gain, ink set, substrate and screen-angle conflicts before exposing screens."
+	model := "uncalibrated-cmyk-gcr"
+	warning := "These process separations are not ICC calibrated. Confirm mesh, dot gain, ink set, substrate and screen-angle conflicts before exposing screens."
+	if iccMeta != nil {
+		model = "icc-calibrated-cmyk-gcr"
+		warning = "Artwork was ICC-transformed before separation. Still verify mesh, dot gain and press conditions."
+		metadata["icc"] = iccMeta
+	}
+	metadata["screen"] = map[string]any{"model": model, "dpi": dpi, "lpi": lpi, "gamma": gamma, "screening": screening, "anglesDegrees": angles, "underbaseChokePixels": choke, "trapPreset": r.URL.Query().Get("trapPreset"), "angleConflicts": prod.DetectScreenAngleConflicts(angles)}
+	metadata["warning"] = warning
 	writeProductionArchive(w, safeProductionName(r.URL.Query().Get("name"))+"-screen-package.zip", "Screen print", files, metadata)
 }
 
@@ -146,9 +210,16 @@ func productionHalftone(w http.ResponseWriter, r *http.Request) {
 		}
 		return v
 	}
-	screen := prod.AMHalftone(src, prod.HalftoneConfig{DPI: number("dpi", 300), LPI: number("lpi", 45), AngleDegrees: number("angle", 22.5), Gamma: number("gamma", 1)})
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	var screen *image.Gray
+	if mode == "fm" {
+		screen = prod.FMHalftone(src, number("gamma", 1))
+		w.Header().Set("X-PrintStudio-Operation", "fm-halftone")
+	} else {
+		screen = prod.AMHalftone(src, prod.HalftoneConfig{DPI: number("dpi", 300), LPI: number("lpi", 45), AngleDegrees: number("angle", 22.5), Gamma: number("gamma", 1)})
+		w.Header().Set("X-PrintStudio-Operation", "am-halftone")
+	}
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("X-PrintStudio-Operation", "am-halftone")
 	_ = png.Encode(w, screen)
 }
 func productionCMYK(w http.ResponseWriter, r *http.Request) {
@@ -156,9 +227,14 @@ func productionCMYK(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if requireTruthy(r, "requireIcc") {
+		problem(w, http.StatusUnprocessableEntity, "raw CMYK endpoint is intentionally uncalibrated; use /v1/production/screen/pack?requireIcc=true with ICC profiles instead")
+		return
+	}
 	bands := prod.SeparateCMYK(src)
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="cmyk-separations.zip"`)
+	w.Header().Set("X-PrintStudio-Colour-Model", "device-independent-naive-cmyk")
 	archive := zip.NewWriter(w)
 	for _, band := range []struct {
 		name  string
@@ -168,8 +244,86 @@ func productionCMYK(w http.ResponseWriter, r *http.Request) {
 		_ = png.Encode(file, band.image)
 	}
 	manifest, _ := archive.Create("manifest.json")
-	_ = json.NewEncoder(manifest).Encode(map[string]any{"schemaVersion": 1, "model": "device-independent-naive-cmyk", "warning": "Use ICC conversion for calibrated production colour."})
+	_ = json.NewEncoder(manifest).Encode(map[string]any{"schemaVersion": 1, "model": "device-independent-naive-cmyk", "warning": "Uncalibrated preview only. Use ICC-calibrated screen pack for production colour."})
 	_ = archive.Close()
+}
+func productionSpotMatch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Colors    []string `json:"colors"`
+		MaxDeltaE float64  `json:"maxDeltaE"`
+	}
+	if decode(w, r, &in) != nil {
+		return
+	}
+	if len(in.Colors) == 0 {
+		problem(w, http.StatusUnprocessableEntity, "colors array is required")
+		return
+	}
+	matches, err := prod.MatchSpots(in.Colors, in.MaxDeltaE)
+	if err != nil {
+		problem(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"matches": matches, "library": "printstudio-default-named-inks"})
+}
+func productionAngleCheck(w http.ResponseWriter, r *http.Request) {
+	var in prod.ScreenAngleSet
+	if decode(w, r, &in) != nil {
+		return
+	}
+	conflicts := prod.DetectScreenAngleConflicts(in)
+	write(w, http.StatusOK, map[string]any{"angles": in, "conflicts": conflicts, "ok": len(conflicts) == 0 || !hasErrorConflict(conflicts)})
+}
+func listICCProfiles(w http.ResponseWriter, _ *http.Request) {
+	if iccProfiles == nil {
+		problem(w, http.StatusNotImplemented, "ICC profile store is not configured; set ICC_PROFILE_DIR")
+		return
+	}
+	items, err := iccProfiles.List()
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "could not list ICC profiles")
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"profiles": items})
+}
+func uploadICCProfile(w http.ResponseWriter, r *http.Request) {
+	if iccProfiles == nil {
+		problem(w, http.StatusNotImplemented, "ICC profile store is not configured; set ICC_PROFILE_DIR")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		problem(w, http.StatusRequestEntityTooLarge, "ICC profile exceeds 8 MB")
+		return
+	}
+	meta, err := iccProfiles.Put(r.URL.Query().Get("id"), r.URL.Query().Get("label"), r.URL.Query().Get("description"), data)
+	if err != nil {
+		problem(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	write(w, http.StatusCreated, meta)
+}
+func applyICCTransform(w http.ResponseWriter, r *http.Request) {
+	data, _, ok := decodeProductionPNG(w, r)
+	if !ok {
+		return
+	}
+	out, meta, err := applyProductionICC(r.Context(), data, r.URL.Query().Get("sourceProfile"), r.URL.Query().Get("destinationProfile"), r.URL.Query().Get("intent"))
+	if err != nil {
+		status := http.StatusUnprocessableEntity
+		if strings.Contains(err.Error(), "unavailable") {
+			status = http.StatusNotImplemented
+		}
+		problem(w, status, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("X-PrintStudio-Operation", "icc-transform")
+	if raw, err := json.Marshal(meta); err == nil {
+		w.Header().Set("X-PrintStudio-ICC", string(raw))
+	}
+	_, _ = w.Write(out)
 }
 func productionNest(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -355,4 +509,73 @@ func safeProductionName(value string) string {
 		return "printstudio-design"
 	}
 	return result
+}
+
+var iccProfiles *prod.ICCProfileStore
+
+func requireTruthy(r *http.Request, name string) bool {
+	value := strings.ToLower(strings.TrimSpace(r.URL.Query().Get(name)))
+	return value == "1" || value == "true" || value == "yes"
+}
+
+func hasErrorConflict(conflicts []prod.AngleConflict) bool {
+	for _, conflict := range conflicts {
+		if conflict.Severity == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+func applyProductionICC(ctx context.Context, pngData []byte, sourceID, destinationID, intent string) ([]byte, map[string]any, error) {
+	if iccProfiles == nil {
+		return nil, nil, fmt.Errorf("ICC profile store is unavailable; set ICC_PROFILE_DIR")
+	}
+	tools := prod.NativeTools{Vips: os.Getenv("VIPS_BIN")}
+	if !tools.Probe().ICC {
+		return nil, nil, fmt.Errorf("libvips ICC transform is unavailable")
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	destinationID = strings.TrimSpace(destinationID)
+	if sourceID == "" || destinationID == "" {
+		return nil, nil, fmt.Errorf("sourceProfile and destinationProfile query parameters are required for ICC conversion")
+	}
+	sourceMeta, sourcePath, err := iccProfiles.Get(sourceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	destMeta, destPath, err := iccProfiles.Get(destinationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	tmp, err := os.MkdirTemp("", "printstudio-icc-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer os.RemoveAll(tmp)
+	input := filepath.Join(tmp, "input.png")
+	output := filepath.Join(tmp, "output.png")
+	if err := os.WriteFile(input, pngData, 0o600); err != nil {
+		return nil, nil, err
+	}
+	if err := tools.ICCTransform(ctx, input, output, sourcePath, destPath, intent); err != nil {
+		return nil, nil, err
+	}
+	out, err := os.ReadFile(output)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, map[string]any{
+		"sourceProfile":      sourceMeta,
+		"destinationProfile": destMeta,
+		"intent":             intentOrDefault(intent),
+		"engine":             "libvips+littlecms",
+	}, nil
+}
+
+func intentOrDefault(intent string) string {
+	if strings.TrimSpace(intent) == "" {
+		return "relative"
+	}
+	return intent
 }
