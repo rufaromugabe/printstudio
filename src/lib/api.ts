@@ -9,6 +9,8 @@ export type EmbroideryRegion={id:string;threadId:string;geometry:{rings:Embroide
 export type EmbroideryRequest={name:string;regions:EmbroideryRegion[];machine:{id:string;name:string;hoopWidthMm:number;hoopHeightMm:number;maxStitches:number;maxColors:number;minStitchMm:number;maxStitchMm:number;maxJumpMm:number}};
 export type EmbroideryDiagnostic={severity:"error"|"warning";code:string;message:string;regionId:string};
 export type EmbroideryCompilation={document:{sourceHash:string;compilerVersion:string;diagnostics:EmbroideryDiagnostic[];plan:{underlay:unknown[];stitches:unknown[]}[]};svg:string};
+export type PolygonPoint={x:number;y:number};
+export type PolygonPaths=PolygonPoint[][];
 const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -43,4 +45,6 @@ export const api = {
   productionHalftone:(artwork:Blob,dpi=300,lpi=45,angle=22.5,gamma=1)=>requestBlob(`/v1/production/screen/halftone?dpi=${dpi}&lpi=${lpi}&angle=${angle}&gamma=${gamma}`,artwork),
   productionCMYK:(artwork:Blob)=>requestBlob("/v1/production/screen/cmyk",artwork),
   productionCapabilities:()=>request<{icc:boolean;vectorTrace:boolean;polygonBoolean:boolean;vipsPath:string;potracePath:string}>("/v1/production/capabilities"),
+  productionBoolean:(subject:PolygonPaths,clip:PolygonPaths,operation:"union"|"difference"|"intersection"|"xor")=>request<{paths:PolygonPaths}>("/v1/production/vector/boolean",{method:"POST",body:JSON.stringify({subject,clip,operation})}),
+  productionOffset:(paths:PolygonPaths,deltaMm:number,join:"round"|"square"|"miter"="round",miterLimit=2)=>request<{paths:PolygonPaths}>("/v1/production/vector/offset",{method:"POST",body:JSON.stringify({paths,deltaMm,join,miterLimit})}),
 };
