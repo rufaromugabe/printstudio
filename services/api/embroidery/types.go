@@ -104,8 +104,10 @@ const (
 )
 
 type Diagnostic struct {
-	Severity                Severity `json:"severity"`
-	Code, Message, RegionID string
+	Severity Severity `json:"severity"`
+	Code     string   `json:"code"`
+	Message  string   `json:"message"`
+	RegionID string   `json:"regionId"`
 }
 
 func DefaultProfile() MachineProfile {

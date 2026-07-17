@@ -198,6 +198,16 @@ func TestMaxCopiesForSheet(t *testing.T) {
 	}
 }
 
+func TestSingleCopyFitsExactSheetDespiteGap(t *testing.T) {
+	n, err := MaxCopiesForSheet(Sheet{WidthMM: 300, HeightMM: 400, GapMM: 5}, 300, 400, true, 10)
+	if err != nil || n != 1 {
+		t.Fatalf("exact-fit artwork should place one copy, got %d %v", n, err)
+	}
+	if _, err := Nest(Sheet{WidthMM: 210, HeightMM: 297, GapMM: 5}, []Item{{ID: "art", WidthMM: 300, HeightMM: 400, Quantity: 1, AllowRotate: true}}); err == nil {
+		t.Fatal("oversized artwork should still fail on a smaller sheet")
+	}
+}
+
 func TestBilinearScalePreservesColourAtTransparentEdges(t *testing.T) {
 	src := image.NewNRGBA(image.Rect(0, 0, 2, 1))
 	src.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})

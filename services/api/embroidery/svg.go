@@ -10,8 +10,9 @@ import (
 func DiagnosticSVG(d Document) string {
 	var s strings.Builder
 	w, h := d.Machine.HoopWidthMM, d.Machine.HoopHeightMM
-	fmt.Fprintf(&s, "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"%g %g %g %g\">", -w/2, -h/2, w, h)
-	s.WriteString("<rect x=\"-50%\" y=\"-50%\" width=\"100%\" height=\"100%\" fill=\"white\" stroke=\"#bbb\"/>")
+	fmt.Fprintf(&s, "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"%g %g %g %g\" preserveAspectRatio=\"xMidYMid meet\">", -w/2, -h/2, w, h)
+	fmt.Fprintf(&s, "<rect x=\"%g\" y=\"%g\" width=\"%g\" height=\"%g\" fill=\"white\" stroke=\"#bbb\" stroke-width=\"0.4\"/>", -w/2, -h/2, w, h)
+
 	for _, b := range d.Plan {
 		all := append(append([]Stitch{}, b.Underlay...), b.Stitches...)
 		for i := 1; i < len(all); i++ {
