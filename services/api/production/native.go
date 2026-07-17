@@ -21,17 +21,26 @@ type Capabilities struct {
 	NamedInks       []NamedInk   `json:"namedInks"`
 	ICCProfiles     bool         `json:"iccProfiles"`
 	QualityPolicy   string       `json:"qualityPolicy"`
+	ProductionReady bool         `json:"productionReady"`
+	RequireICC      bool         `json:"requireIcc"`
+	RequireApproval bool         `json:"requireApproval"`
+	AcceptanceGates []MethodGate `json:"acceptanceGates"`
 }
 
 func (n NativeTools) Probe() Capabilities {
 	v := resolve(n.Vips, "vips")
 	p := resolve(n.Potrace, "potrace")
+	polygon := Clipper2Available()
+	icc := v != ""
+	trace := p != ""
 	return Capabilities{
-		ICC: v != "", VectorTrace: p != "", VipsPath: v, PotracePath: p, PolygonBoolean: Clipper2Available(),
+		ICC: icc, VectorTrace: trace, VipsPath: v, PotracePath: p, PolygonBoolean: polygon,
 		ScreeningModes: []string{string(ScreeningAM), string(ScreeningFM)},
 		TrapPresets:    TrapPresets(),
 		NamedInks:      DefaultNamedInks(),
-		QualityPolicy:  "fail-closed: no boundary fallbacks, no browser gang sheets, AM angle conflicts rejected, ICC required when requested",
+		QualityPolicy:  "fail-closed: no boundary fallbacks, no browser gang sheets, AM angle conflicts rejected, ICC required when policy enabled",
+		ProductionReady: icc && trace && polygon,
+		AcceptanceGates: MethodAcceptanceGates(),
 	}
 }
 func (n NativeTools) ICCTransform(ctx context.Context, input, output, sourceProfile, destinationProfile, stringIntent string) error {

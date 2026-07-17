@@ -174,6 +174,30 @@ func TestServerGangRenderPlacementAndTransparency(t *testing.T) {
 	}
 }
 
+func TestFillSheetUsesMaxCopies(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 10, 20))
+	for i := range src.Pix {
+		src.Pix[i] = 255
+	}
+	sheet, placements, err := RenderGangSheet(src, GangConfig{Sheet: Sheet{WidthMM: 40, HeightMM: 30, GapMM: 2}, SourceWMM: 10, SourceHMM: 20, FillSheet: true, DPI: 25.4, AllowRotate: true, MaxPixels: 10_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(placements) < 2 {
+		t.Fatalf("expected filled sheet to place multiple copies, got %d", len(placements))
+	}
+	if sheet.Bounds().Empty() {
+		t.Fatal("empty sheet")
+	}
+}
+
+func TestMaxCopiesForSheet(t *testing.T) {
+	n, err := MaxCopiesForSheet(Sheet{WidthMM: 40, HeightMM: 30, GapMM: 2}, 10, 20, true, 50)
+	if err != nil || n < 2 {
+		t.Fatalf("expected at least 2 copies, got %d %v", n, err)
+	}
+}
+
 func TestBilinearScalePreservesColourAtTransparentEdges(t *testing.T) {
 	src := image.NewNRGBA(image.Rect(0, 0, 2, 1))
 	src.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
@@ -259,5 +283,41 @@ func TestICCProfileStoreRoundTrip(t *testing.T) {
 	list, err := store.List()
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list failed: %v %#v", err, list)
+	}
+}
+
+func TestMethodGatesOmitCircularProofApproved(t *testing.T) {
+	for _, gate := range MethodAcceptanceGates() {
+		for _, check := range gate.Checks {
+			if check.ID == "proof-approved" {
+				t.Fatalf("%s still requires proof-approved at create time", gate.Method)
+			}
+		}
+	}
+}
+
+func TestSatisfySystemChecksFillsPlatformOwnedItems(t *testing.T) {
+	caps := Capabilities{PolygonBoolean: true, ICCProfiles: true}
+	got := SatisfySystemChecks("Vinyl", map[string]bool{"blade-test": true}, caps)
+	if !got["clipper2"] || !got["weed-box"] || !got["blade-test"] {
+		t.Fatalf("expected system checks satisfied: %#v", got)
+	}
+	blocked := SatisfySystemChecks("Vinyl", map[string]bool{}, Capabilities{PolygonBoolean: false})
+	if blocked["clipper2"] {
+		t.Fatal("clipper2 must stay false when Clipper2 is unavailable")
+	}
+}
+
+func TestRenderSceneTextOnly(t *testing.T) {
+	img, err := RenderScene(SceneRenderRequest{
+		DPI: 72,
+		View: SceneView{CanvasWidth: 100, CanvasHeight: 100, PhysicalWidthMm: 50, PhysicalHeightMm: 50},
+		Elements: []SceneElement{{ID: "t1", Type: "text", Value: "HI", X: 10, Y: 10, W: 80, H: 40, FontSize: 24, Color: "#112233"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Dx() < 10 || img.Bounds().Dy() < 10 {
+		t.Fatal("empty scene")
 	}
 }

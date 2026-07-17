@@ -84,6 +84,36 @@ func Nest(sheet Sheet, items []Item) ([]Placement, error) {
 	}
 	return result, nil
 }
+
+// MaxCopiesForSheet finds how many identical pieces fit on the sheet using the
+// same MaxRects packer as Nest, so "fill page" matches production placement.
+func MaxCopiesForSheet(sheet Sheet, widthMM, heightMM float64, allowRotate bool, limit int) (int, error) {
+	if widthMM <= 0 || heightMM <= 0 {
+		return 0, fmt.Errorf("source dimensions must be positive")
+	}
+	if limit < 1 {
+		limit = 500
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	low, high, best := 1, limit, 0
+	for low <= high {
+		mid := (low + high) / 2
+		_, err := Nest(sheet, []Item{{ID: "artwork", WidthMM: widthMM, HeightMM: heightMM, Quantity: mid, AllowRotate: allowRotate}})
+		if err == nil {
+			best = mid
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	if best < 1 {
+		return 0, fmt.Errorf("artwork does not fit on the selected sheet")
+	}
+	return best, nil
+}
+
 func splitAndPrune(free []rect, used rect) []rect {
 	var out []rect
 	for _, f := range free {

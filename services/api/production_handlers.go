@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -27,6 +29,9 @@ func productionCapabilities(w http.ResponseWriter, _ *http.Request) {
 	capabilities := tools.Probe()
 	capabilities.MaxRenderPixels = productionMaxPixels()
 	capabilities.ICCProfiles = iccProfiles != nil
+	capabilities.RequireICC = requireICCByPolicy()
+	capabilities.RequireApproval = strings.EqualFold(env("REQUIRE_PRODUCTION_APPROVAL", "false"), "true")
+	capabilities.ProductionReady = capabilities.ProductionReady && capabilities.ICCProfiles
 	write(w, http.StatusOK, capabilities)
 }
 func productionUnderbase(w http.ResponseWriter, r *http.Request) {
@@ -42,11 +47,83 @@ func productionUnderbase(w http.ResponseWriter, r *http.Request) {
 	_ = png.Encode(w, mask)
 }
 
+func productionDTFPackHandler(a *API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data, src, ok := decodeProductionPNG(w, r)
+		if !ok {
+			return
+		}
+		digest := sha256Hex(data)
+		if err := requireApprovedProof(a, r, r.URL.Query().Get("proofId"), digest); err != nil {
+			prod.DefaultMetrics.Failures.Add(1)
+			problem(w, http.StatusConflict, err.Error())
+			return
+		}
+		r = r.WithContext(r.Context())
+		packDTF(w, r, data, src)
+	}
+}
+
+func productionScreenPackHandler(a *API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data, src, ok := decodeProductionPNG(w, r)
+		if !ok {
+			return
+		}
+		digest := sha256Hex(data)
+		if err := requireApprovedProof(a, r, r.URL.Query().Get("proofId"), digest); err != nil {
+			prod.DefaultMetrics.Failures.Add(1)
+			problem(w, http.StatusConflict, err.Error())
+			return
+		}
+		if requireICCByPolicy() && !requireTruthy(r, "allowUncalibrated") {
+			if r.URL.Query().Get("sourceProfile") == "" || r.URL.Query().Get("destinationProfile") == "" {
+				prod.DefaultMetrics.Failures.Add(1)
+				problem(w, http.StatusUnprocessableEntity, "ICC profiles are required for production screen packs (sourceProfile + destinationProfile), or pass allowUncalibrated=true for preview-only")
+				return
+			}
+		}
+		packScreen(w, r, data, src)
+	}
+}
+
+func productionGangRenderHandler(a *API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		productionGangRender(w, r)
+		if w.Header().Get("Content-Type") == "image/png" {
+			prod.DefaultMetrics.GangRenders.Add(1)
+		}
+	}
+}
+
+func productionBooleanHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		productionBoolean(w, r)
+		prod.DefaultMetrics.VectorOps.Add(1)
+	}
+}
+
+func productionOffsetHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		productionOffset(w, r)
+		prod.DefaultMetrics.VectorOps.Add(1)
+	}
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 func productionDTFPack(w http.ResponseWriter, r *http.Request) {
 	data, src, ok := decodeProductionPNG(w, r)
 	if !ok {
 		return
 	}
+	packDTF(w, r, data, src)
+}
+
+func packDTF(w http.ResponseWriter, r *http.Request, data []byte, src image.Image) {
 	spread := integerQuery(r, "spread", 2)
 	threshold := integerQuery(r, "threshold", 1)
 	if presetID := strings.TrimSpace(r.URL.Query().Get("trapPreset")); presetID != "" {
@@ -78,6 +155,7 @@ func productionDTFPack(w http.ResponseWriter, r *http.Request) {
 	metadata := productionMetadata(r, src.Bounds())
 	metadata["underbase"] = map[string]any{"algorithm": "exact-euclidean-distance-transform", "spreadPixels": spread, "threshold": threshold, "trapPreset": r.URL.Query().Get("trapPreset")}
 	metadata["warning"] = "Final ink limits, white density and printer-specific RIP settings must be verified by the operator."
+	prod.DefaultMetrics.Packs.Add(1)
 	writeProductionArchive(w, safeProductionName(r.URL.Query().Get("name"))+"-dtf-package.zip", "DTF", files, metadata)
 }
 
@@ -86,6 +164,10 @@ func productionScreenPack(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	packScreen(w, r, data, src)
+}
+
+func packScreen(w http.ResponseWriter, r *http.Request, data []byte, src image.Image) {
 	dpi := numberQuery(r, "dpi", 300)
 	lpi := numberQuery(r, "lpi", 45)
 	gamma := numberQuery(r, "gamma", 1)
@@ -117,7 +199,7 @@ func productionScreenPack(w http.ResponseWriter, r *http.Request) {
 	}
 	calibratedPNG := data
 	var iccMeta map[string]any
-	if requireTruthy(r, "requireIcc") || r.URL.Query().Get("sourceProfile") != "" || r.URL.Query().Get("destinationProfile") != "" {
+	if r.URL.Query().Get("sourceProfile") != "" || r.URL.Query().Get("destinationProfile") != "" || requireTruthy(r, "requireIcc") {
 		transformed, meta, err := applyProductionICC(r.Context(), data, r.URL.Query().Get("sourceProfile"), r.URL.Query().Get("destinationProfile"), r.URL.Query().Get("intent"))
 		if err != nil {
 			status := http.StatusUnprocessableEntity
@@ -135,6 +217,7 @@ func productionScreenPack(w http.ResponseWriter, r *http.Request) {
 		}
 		src = decoded
 		iccMeta = meta
+		prod.DefaultMetrics.ICCTransforms.Add(1)
 	}
 	files, err := prod.BuildScreenFiles(src, prod.ScreenPackConfig{DPI: dpi, LPI: lpi, Gamma: gamma, UnderbaseChokePX: choke, Screening: screening, Angles: angles, TrapPresetID: r.URL.Query().Get("trapPreset")})
 	if err != nil {
@@ -154,6 +237,7 @@ func productionScreenPack(w http.ResponseWriter, r *http.Request) {
 	}
 	metadata["screen"] = map[string]any{"model": model, "dpi": dpi, "lpi": lpi, "gamma": gamma, "screening": screening, "anglesDegrees": angles, "underbaseChokePixels": choke, "trapPreset": r.URL.Query().Get("trapPreset"), "angleConflicts": prod.DetectScreenAngleConflicts(angles)}
 	metadata["warning"] = warning
+	prod.DefaultMetrics.Packs.Add(1)
 	writeProductionArchive(w, safeProductionName(r.URL.Query().Get("name"))+"-screen-package.zip", "Screen print", files, metadata)
 }
 
@@ -173,6 +257,7 @@ func productionGangRender(w http.ResponseWriter, r *http.Request) {
 		SourceWMM:   numberQuery(r, "sourceWidthMm", 0),
 		SourceHMM:   numberQuery(r, "sourceHeightMm", 0),
 		Copies:      integerQuery(r, "copies", 1),
+		FillSheet:   requireTruthy(r, "fillSheet"),
 		DPI:         dpi,
 		AllowRotate: r.URL.Query().Get("allowRotate") == "true",
 		MaxPixels:   productionMaxPixels(),
@@ -196,6 +281,8 @@ func productionGangRender(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="`+safeProductionName(r.URL.Query().Get("name"))+`-gang-sheet.png"`)
 	w.Header().Set("X-PrintStudio-Renderer", "server-maxrects")
 	w.Header().Set("X-PrintStudio-Placement-Count", strconv.Itoa(len(placements)))
+	w.Header().Set("X-PrintStudio-Sheet-Width-Mm", strconv.FormatFloat(config.Sheet.WidthMM, 'f', -1, 64))
+	w.Header().Set("X-PrintStudio-Sheet-Height-Mm", strconv.FormatFloat(config.Sheet.HeightMM, 'f', -1, 64))
 	_ = png.Encode(w, sheet)
 }
 func productionHalftone(w http.ResponseWriter, r *http.Request) {

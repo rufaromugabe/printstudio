@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.2
 	github.com/epit3d/goclipper2 v0.0.9
 	github.com/jackc/pgx/v5 v5.7.6
+	golang.org/x/image v0.44.0
 	google.golang.org/api v0.289.0
 )
 

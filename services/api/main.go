@@ -85,6 +85,7 @@ func main() {
 		}
 		iccProfiles = store
 	}
+	enforceProductionNativesOrExit()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) { write(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /health/ready", api.ready)
@@ -107,20 +108,26 @@ func main() {
 	mux.Handle("POST /v1/embroidery/compile", api.auth(http.HandlerFunc(compileEmbroidery)))
 	mux.Handle("POST /v1/embroidery/export/dst", api.auth(http.HandlerFunc(exportEmbroidery)))
 	mux.Handle("GET /v1/production/capabilities", api.auth(http.HandlerFunc(productionCapabilities)))
+	mux.Handle("GET /v1/production/gates", api.auth(http.HandlerFunc(productionGates)))
+	mux.Handle("GET /v1/production/metrics", api.auth(api.requireRole("admin", http.HandlerFunc(productionMetrics))))
+	mux.Handle("POST /v1/production/render/scene", api.auth(productionSceneRender(api)))
+	mux.Handle("POST /v1/production/proofs", api.auth(createProductionProof(api)))
+	mux.Handle("GET /v1/production/proofs/{id}", api.auth(getProductionProof(api)))
+	mux.Handle("POST /v1/production/proofs/{id}/approve", api.auth(approveProductionProof(api)))
 	mux.Handle("POST /v1/production/dtf/underbase", api.auth(http.HandlerFunc(productionUnderbase)))
-	mux.Handle("POST /v1/production/dtf/pack", api.auth(http.HandlerFunc(productionDTFPack)))
+	mux.Handle("POST /v1/production/dtf/pack", api.auth(productionDTFPackHandler(api)))
 	mux.Handle("POST /v1/production/screen/halftone", api.auth(http.HandlerFunc(productionHalftone)))
 	mux.Handle("POST /v1/production/screen/cmyk", api.auth(http.HandlerFunc(productionCMYK)))
-	mux.Handle("POST /v1/production/screen/pack", api.auth(http.HandlerFunc(productionScreenPack)))
+	mux.Handle("POST /v1/production/screen/pack", api.auth(productionScreenPackHandler(api)))
 	mux.Handle("POST /v1/production/screen/angles", api.auth(http.HandlerFunc(productionAngleCheck)))
 	mux.Handle("POST /v1/production/spot/match", api.auth(http.HandlerFunc(productionSpotMatch)))
 	mux.Handle("GET /v1/production/icc/profiles", api.auth(http.HandlerFunc(listICCProfiles)))
 	mux.Handle("POST /v1/production/icc/profiles", api.auth(api.requireRole("admin", http.HandlerFunc(uploadICCProfile))))
 	mux.Handle("POST /v1/production/icc/transform", api.auth(http.HandlerFunc(applyICCTransform)))
 	mux.Handle("POST /v1/production/gang/nest", api.auth(http.HandlerFunc(productionNest)))
-	mux.Handle("POST /v1/production/gang/render", api.auth(http.HandlerFunc(productionGangRender)))
-	mux.Handle("POST /v1/production/vector/boolean", api.auth(http.HandlerFunc(productionBoolean)))
-	mux.Handle("POST /v1/production/vector/offset", api.auth(http.HandlerFunc(productionOffset)))
+	mux.Handle("POST /v1/production/gang/render", api.auth(productionGangRenderHandler(api)))
+	mux.Handle("POST /v1/production/vector/boolean", api.auth(productionBooleanHandler()))
+	mux.Handle("POST /v1/production/vector/offset", api.auth(productionOffsetHandler()))
 	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: requestLog(cors(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second}
 	go func() {
 		log.Printf("PrintStudio API %s", server.Addr)
@@ -184,7 +191,16 @@ func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "database unavailable")
 		return
 	}
-	write(w, 200, map[string]string{"status": "ready"})
+	caps := prod.NativeTools{Vips: os.Getenv("VIPS_BIN"), Potrace: os.Getenv("POTRACE_BIN")}.Probe()
+	write(w, 200, map[string]any{
+		"status":           "ready",
+		"icc":              caps.ICC,
+		"vectorTrace":      caps.VectorTrace,
+		"polygonBoolean":   caps.PolygonBoolean,
+		"iccProfiles":      iccProfiles != nil,
+		"productionReady":  caps.ICC && caps.VectorTrace && caps.PolygonBoolean && iccProfiles != nil,
+		"requireNatives":   strings.EqualFold(env("REQUIRE_PRODUCTION_NATIVES", "false"), "true"),
+	})
 }
 
 func (a *API) createAssetUpload(w http.ResponseWriter, r *http.Request) {

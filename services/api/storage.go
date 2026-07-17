@@ -95,6 +95,13 @@ func (s *ObjectStore) downloadURL(ctx context.Context, key string) (string, erro
 func (s *ObjectStore) delete(ctx context.Context, key string) {
 	_, _ = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &key})
 }
+func (s *ObjectStore) open(ctx context.Context, key string) (io.ReadCloser, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+	if err != nil {
+		return nil, err
+	}
+	return out.Body, nil
+}
 func (s *ObjectStore) inspect(ctx context.Context, key, expectedType string, expectedSize int64, expectedSHA string) (int, int, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
 	if err != nil {

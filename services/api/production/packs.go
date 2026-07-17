@@ -40,6 +40,7 @@ type GangConfig struct {
 	SourceWMM   float64
 	SourceHMM   float64
 	Copies      int
+	FillSheet   bool
 	DPI         float64
 	AllowRotate bool
 	MaxPixels   int64
@@ -153,6 +154,13 @@ func AMHalftoneCoverage(mask *image.Gray, config HalftoneConfig) *image.Gray {
 func RenderGangSheet(src image.Image, config GangConfig) (*image.NRGBA, []Placement, error) {
 	if config.DPI <= 0 {
 		config.DPI = 300
+	}
+	if config.FillSheet {
+		copies, err := MaxCopiesForSheet(config.Sheet, config.SourceWMM, config.SourceHMM, config.AllowRotate, 500)
+		if err != nil {
+			return nil, nil, err
+		}
+		config.Copies = copies
 	}
 	if config.Copies < 1 || config.Copies > 500 {
 		return nil, nil, fmt.Errorf("gang copy count must be between 1 and 500")
