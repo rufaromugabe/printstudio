@@ -22,6 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function requestBlob(path:string,body:Blob):Promise<Blob>{const token=typeof window!=="undefined"?localStorage.getItem("printstudio-google-token"):null;const response=await fetch(`${base}${path}`,{method:"POST",headers:{"Content-Type":body.type||"image/png",...(token?{Authorization:`Bearer ${token}`}:{})},body});if(!response.ok){const problem=await response.json().catch(()=>({}));throw new Error(problem.message??`Production request failed (${response.status})`)}return response.blob()}
 export const api = {
   products: () => request<Product[]>("/v1/products"),
+  assets: () => request<Asset[]>("/v1/assets"),
   designs: <T>() => request<CloudDesign<T>[]>("/v1/designs"),
   create: <T>(name: string, document: T) => request<CloudDesign<T>>("/v1/designs", { method: "POST", body: JSON.stringify({ name, document }) }),
   update: <T>(id: string, version:number, name: string, document: T) => request<CloudDesign<T>>(`/v1/designs/${id}`, { method: "PUT", body: JSON.stringify({ version, name, document }) }),
@@ -42,9 +43,12 @@ export const api = {
     return response.blob();
   },
   productionUnderbase:(artwork:Blob,spreadPixels:number,threshold=1)=>requestBlob(`/v1/production/dtf/underbase?spread=${spreadPixels}&threshold=${threshold}`,artwork),
+  productionDTFPack:(artwork:Blob,options:{name:string;widthMm:number;heightMm:number;dpi?:number;spread?:number;threshold?:number})=>{const query=new URLSearchParams({name:options.name,widthMm:String(options.widthMm),heightMm:String(options.heightMm),dpi:String(options.dpi??300),spread:String(options.spread??2),threshold:String(options.threshold??1)});return requestBlob(`/v1/production/dtf/pack?${query}`,artwork)},
   productionHalftone:(artwork:Blob,dpi=300,lpi=45,angle=22.5,gamma=1)=>requestBlob(`/v1/production/screen/halftone?dpi=${dpi}&lpi=${lpi}&angle=${angle}&gamma=${gamma}`,artwork),
   productionCMYK:(artwork:Blob)=>requestBlob("/v1/production/screen/cmyk",artwork),
-  productionCapabilities:()=>request<{icc:boolean;vectorTrace:boolean;polygonBoolean:boolean;vipsPath:string;potracePath:string}>("/v1/production/capabilities"),
+  productionScreenPack:(artwork:Blob,options:{name:string;widthMm:number;heightMm:number;dpi?:number;lpi?:number;gamma?:number;underbaseChoke?:number})=>{const query=new URLSearchParams({name:options.name,widthMm:String(options.widthMm),heightMm:String(options.heightMm),dpi:String(options.dpi??300),lpi:String(options.lpi??45),gamma:String(options.gamma??1),underbaseChoke:String(options.underbaseChoke??-2)});return requestBlob(`/v1/production/screen/pack?${query}`,artwork)},
+  productionGangRender:(artwork:Blob,options:{name:string;sourceWidthMm:number;sourceHeightMm:number;sheetWidthMm:number;sheetHeightMm:number;copies:number;dpi?:number;gapMm?:number;marginMm?:number;allowRotate?:boolean})=>{const query=new URLSearchParams({name:options.name,sourceWidthMm:String(options.sourceWidthMm),sourceHeightMm:String(options.sourceHeightMm),sheetWidthMm:String(options.sheetWidthMm),sheetHeightMm:String(options.sheetHeightMm),copies:String(options.copies),dpi:String(options.dpi??300),gapMm:String(options.gapMm??5),marginMm:String(options.marginMm??0),allowRotate:String(options.allowRotate??true)});return requestBlob(`/v1/production/gang/render?${query}`,artwork)},
+  productionCapabilities:()=>request<{icc:boolean;vectorTrace:boolean;polygonBoolean:boolean;maxRenderPixels:number;vipsPath:string;potracePath:string}>("/v1/production/capabilities"),
   productionBoolean:(subject:PolygonPaths,clip:PolygonPaths,operation:"union"|"difference"|"intersection"|"xor")=>request<{paths:PolygonPaths}>("/v1/production/vector/boolean",{method:"POST",body:JSON.stringify({subject,clip,operation})}),
   productionOffset:(paths:PolygonPaths,deltaMm:number,join:"round"|"square"|"miter"="round",miterLimit=2)=>request<{paths:PolygonPaths}>("/v1/production/vector/offset",{method:"POST",body:JSON.stringify({paths,deltaMm,join,miterLimit})}),
 };

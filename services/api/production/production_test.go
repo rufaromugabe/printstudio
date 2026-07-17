@@ -1,8 +1,10 @@
 package production
 
 import (
+	"bytes"
 	"image"
 	"image/color"
+	"image/png"
 	"testing"
 )
 
@@ -110,5 +112,74 @@ func TestNativeCapabilitiesAreExplicit(t *testing.T) {
 	c := NativeTools{Vips: "definitely-missing-vips", Potrace: "definitely-missing-potrace"}.Probe()
 	if c.ICC || c.VectorTrace {
 		t.Fatal("missing native tools reported available")
+	}
+}
+
+func TestDTFPackContainsColourAndEuclideanUnderbase(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 7, 7))
+	src.SetNRGBA(3, 3, color.NRGBA{R: 240, G: 50, B: 20, A: 255})
+	colour, err := EncodePNG(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := BuildDTFFiles(src, colour, DTFPackConfig{SpreadPixels: 1, Threshold: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Name != "color.png" || files[1].Name != "white-underbase.png" || len(files[0].SHA256) != 64 {
+		t.Fatalf("unexpected DTF files: %#v", files)
+	}
+	mask, err := png.Decode(bytes.NewReader(files[1].Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, adjacent := mask.At(2, 3).RGBA()
+	_, _, _, diagonal := mask.At(2, 2).RGBA()
+	if adjacent == 0 || diagonal != 0 {
+		t.Fatal("pack underbase did not preserve Euclidean spread geometry")
+	}
+}
+
+func TestScreenPackHalftoneUsesCoveragePolarity(t *testing.T) {
+	mask := image.NewGray(image.Rect(0, 0, 64, 64))
+	for i := range mask.Pix {
+		mask.Pix[i] = 255
+	}
+	screen := AMHalftoneCoverage(mask, HalftoneConfig{DPI: 300, LPI: 45, AngleDegrees: 15})
+	on := 0
+	for _, value := range screen.Pix {
+		if value > 0 {
+			on++
+		}
+	}
+	if on < len(screen.Pix)*9/10 {
+		t.Fatalf("full ink coverage produced only %d/%d screened pixels", on, len(screen.Pix))
+	}
+}
+
+func TestServerGangRenderPlacementAndTransparency(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 10, 20))
+	for i := range src.Pix {
+		src.Pix[i] = 255
+	}
+	sheet, placements, err := RenderGangSheet(src, GangConfig{Sheet: Sheet{WidthMM: 40, HeightMM: 30, GapMM: 2}, SourceWMM: 10, SourceHMM: 20, Copies: 3, DPI: 25.4, AllowRotate: true, MaxPixels: 10_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheet.Bounds().Dx() != 40 || sheet.Bounds().Dy() != 30 || len(placements) != 3 {
+		t.Fatalf("unexpected gang output %v, %d placements", sheet.Bounds(), len(placements))
+	}
+	if sheet.NRGBAAt(39, 29).A != 0 {
+		t.Fatal("unused gang-sheet area must remain transparent")
+	}
+}
+
+func TestBilinearScalePreservesColourAtTransparentEdges(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	src.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
+	scaled := scaleBilinear(src, 4, 1)
+	edge := scaled.NRGBAAt(2, 0)
+	if edge.A == 0 || edge.R < 250 {
+		t.Fatalf("transparent-edge interpolation introduced a dark fringe: %#v", edge)
 	}
 }

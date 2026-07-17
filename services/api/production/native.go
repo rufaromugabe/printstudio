@@ -10,11 +10,12 @@ import (
 
 type NativeTools struct{ Vips, Potrace string }
 type Capabilities struct {
-	ICC            bool   `json:"icc"`
-	VectorTrace    bool   `json:"vectorTrace"`
-	VipsPath       string `json:"vipsPath"`
-	PotracePath    string `json:"potracePath"`
-	PolygonBoolean bool   `json:"polygonBoolean"`
+	ICC             bool   `json:"icc"`
+	VectorTrace     bool   `json:"vectorTrace"`
+	VipsPath        string `json:"vipsPath"`
+	PotracePath     string `json:"potracePath"`
+	PolygonBoolean  bool   `json:"polygonBoolean"`
+	MaxRenderPixels int64  `json:"maxRenderPixels"`
 }
 
 func (n NativeTools) Probe() Capabilities {

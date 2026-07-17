@@ -46,6 +46,14 @@ The engine produces four 8-bit separation masks with gray-component replacement.
 - Free-rectangle splitting and containment pruning
 - Hard failure when an item cannot fit
 - Non-overlap and boundary regression tests
+currently does expot 
+`production/packs.go` uses those placements to composite transparent PNG sheets on the server. It caches normal and rotated source tiles, uses premultiplied-alpha bilinear interpolation when pixel rounding requires resampling, and enforces the `MAX_RENDER_PIXELS` ceiling (100 megapixels by default).
+
+### Production packages
+
+The DTF package contains the original validated colour PNG and an exact-Euclidean white-underbase plate. The screen package contains continuous and screened C/M/Y/K plates plus a choked underbase. Every generated plate is SHA-256 hashed in a versioned manifest.
+
+Physical dimensions, DPI and PNG pixel dimensions are cross-checked before packaging. The engine rejects inconsistent metadata rather than silently resampling production artwork.
 
 ## Native production capabilities
 
@@ -76,9 +84,12 @@ Authenticated routes:
 ```text
 GET  /v1/production/capabilities
 POST /v1/production/dtf/underbase?spread=2&threshold=1
+POST /v1/production/dtf/pack
 POST /v1/production/screen/halftone?dpi=300&lpi=45&angle=22.5&gamma=1
 POST /v1/production/screen/cmyk
+POST /v1/production/screen/pack
 POST /v1/production/gang/nest
+POST /v1/production/gang/render
 POST /v1/production/vector/boolean
 POST /v1/production/vector/offset
 ```
@@ -99,6 +110,10 @@ The test suite covers:
 - HTTP PNG decoding and responses
 - HTTP nesting contracts
 - Capability-gated polygon endpoint contracts in the portable build
+- DTF ZIP contents and manifest integrity fields
+- Screen plate count and ink-coverage polarity
+- Server gang-sheet dimensions, placement count and transparency
+- Transparent-edge colour preservation during resampling
 
 ## Remaining moat work
 

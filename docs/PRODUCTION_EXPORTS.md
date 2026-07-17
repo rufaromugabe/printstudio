@@ -13,8 +13,11 @@ Current output:
 - Effective-DPI calculation at placed size
 - Warning below 300 DPI and stronger warning below 150 DPI
 - 36-megapixel browser safety ceiling
+- One-click server-generated production ZIP containing `color.png`, `white-underbase.png`, `manifest.json` and operator instructions
+- Exact Euclidean underbase spread/choke generated from the colour PNG alpha channel
+- SHA-256, byte size, MIME type, physical dimensions, pixel dimensions, DPI and underbase settings recorded in the package manifest
 
-The PNG is artwork-ready, but printer-specific white-underbase generation, ink limiting, ICC conversion and RIP screening remain responsibilities of the DTF RIP. PrintStudio must not claim that a generic PNG replaces those device-specific stages.
+The colour and generic white-underbase separations are artwork-ready inputs to a DTF workflow. Printer-specific white density, ink limiting, ICC conversion, curing parameters and final RIP screening remain operator responsibilities. PrintStudio must not claim that a generic package replaces those device-specific stages.
 
 ## Heat-transfer vinyl
 
@@ -29,6 +32,8 @@ Current output:
 
 Remaining specialist work includes path-union cleanup, overlap removal, automatic weed boxes, multi-colour registration marks and blade/material profiles.
 
+The API already exposes capability-gated Clipper2 Boolean and offset routes. Vinyl export must only switch from the current disclosed contour fallback after the CGO backend passes native deployment verification.
+
 ## Screen printing
 
 Current output:
@@ -38,8 +43,12 @@ Current output:
 - Solid vector silhouettes for traced elements
 - Colour-count warning above eight inks
 - Explicit warning when raster artwork would require halftone separation
+- Server production ZIP with continuous-tone C, M, Y and K masks
+- Deterministic 45-LPI AM screens using C=15°, M=75°, Y=0° and K=45° defaults
+- Configurable DPI, LPI, gamma and underbase choke
+- Generic white-underbase plate plus integrity manifest
 
-The current output is appropriate for solid spot-colour artwork. Process-colour separation, simulated process, underbase choking, trapping, halftone frequency/angle and device-specific RIP output are not yet generated.
+The layered SVG remains appropriate for solid spot-colour artwork. The process package is explicitly uncalibrated CMYK: mesh, dot gain, ink set, substrate, trapping and screen-angle conflicts require operator verification. ICC-calibrated conversion remains capability-gated on libvips/LittleCMS.
 
 ## Sublimation
 
@@ -57,6 +66,8 @@ Printer/paper ICC conversion and product-specific seam warping remain downstream
 
 - Output filenames are sanitized.
 - Browser rendering is rejected over 36 megapixels to prevent memory exhaustion.
+- The server gang compositor accepts validated PNG artwork and can build sheets up to the bounded `MAX_RENDER_PIXELS` limit (100 megapixels by default).
+- Server pack and gang requests reject pixel dimensions that disagree with declared millimetres and DPI; silent upscaling is not permitted.
 - Cross-origin artwork that cannot be decoded fails raster export instead of silently disappearing.
 - Vector tracing reports any boundary fallback.
 - The review dialog shows dimensions, output format, warnings and method-specific controls before download.
@@ -69,16 +80,16 @@ Printer/paper ICC conversion and product-specific seam warping remain downstream
 - PDF uses the exact physical page dimensions and embeds the reviewed production artwork.
 - TIFF is encoded from the reviewed artwork at its production pixel dimensions with 300-DPI resolution metadata.
 - ZIP packages use DEFLATE compression and include a SHA-256 manifest for integrity checking.
-- DTF gang sheets use original-size tiles, configurable sheet dimensions, copy count and 5 mm spacing.
-- Gang sheets that exceed the 36-megapixel browser ceiling are rejected instead of being silently downsampled.
+- DTF gang sheets use deterministic MaxRects placement, original physical size, optional 90-degree rotation, configurable sheet dimensions, copy count, margins and spacing.
+- Gang-sheet compositing runs in Go, uses premultiplied-alpha bilinear resampling when rounding requires it, and preserves transparent unused sheet area.
 - Vinyl SVG automatically removes duplicate traced paths and adds a weed box.
 
 ## Next production milestones
 
-1. Server-side rendering workers for larger than 36-megapixel files.
-2. Irregular DTF gang-sheet nesting, automatic rotation and cut-line generation.
-3. Geometric vinyl path union, overlap subtraction and configurable registration marks.
-4. Screen-print spot separation, trapping and configurable halftones.
-5. ICC-aware colour-conversion pipeline with embedded profile metadata.
-6. Sublimation panel splitting and product-specific seam templates.
-7. Server-backed export history shared across devices and team members.
+1. Move single-artwork scene reconstruction to asynchronous server workers; the current server ownership covers packaging and gang-sheet pixel compositing, while the initial colour tile is still rendered in the browser at up to 36 megapixels.
+2. Add gang-sheet cut contours and multi-artwork irregular nesting.
+3. Activate geometric vinyl union/hole subtraction/blade compensation after the tagged Clipper2 build passes native verification.
+4. Add spot-colour Lab/DeltaE matching, trapping and named-ink libraries.
+5. Add managed ICC profile upload/versioning and apply libvips conversion only when the capability probe succeeds.
+6. Add sublimation panel splitting and product-specific seam templates.
+7. Add server-backed export history shared across devices and team members.

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -93,5 +95,75 @@ func TestProductionOffsetRequiresNativeClipperBuild(t *testing.T) {
 	productionOffset(res, req)
 	if res.Code != http.StatusNotImplemented {
 		t.Fatalf("status %d: %s", res.Code, res.Body.String())
+	}
+}
+
+func TestProductionDTFPackHandler(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/production/dtf/pack?name=Shop+Logo&widthMm=0.5927&heightMm=0.5927&spread=1", bytes.NewReader(productionPNG(t)))
+	res := httptest.NewRecorder()
+	productionDTFPack(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", res.Code, res.Body.String())
+	}
+	archive, err := zip.NewReader(bytes.NewReader(res.Body.Bytes()), int64(res.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, file := range archive.File {
+		found[file.Name] = true
+		if file.Name == "manifest.json" {
+			reader, openErr := file.Open()
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			var manifest struct {
+				SchemaVersion int `json:"schemaVersion"`
+				Files         []struct {
+					SHA256 string `json:"sha256"`
+				} `json:"files"`
+			}
+			if json.NewDecoder(reader).Decode(&manifest) != nil || manifest.SchemaVersion != 2 || len(manifest.Files) != 2 || len(manifest.Files[0].SHA256) != 64 {
+				t.Fatal("invalid DTF manifest")
+			}
+			_ = reader.Close()
+		}
+	}
+	for _, name := range []string{"color.png", "white-underbase.png", "manifest.json", "production-instructions.txt"} {
+		if !found[name] {
+			t.Fatalf("DTF archive omitted %s", name)
+		}
+	}
+}
+
+func TestProductionScreenPackHandler(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/production/screen/pack?name=Logo&widthMm=0.5927&heightMm=0.5927&lpi=45", bytes.NewReader(productionPNG(t)))
+	res := httptest.NewRecorder()
+	productionScreenPack(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", res.Code, res.Body.String())
+	}
+	archive, err := zip.NewReader(bytes.NewReader(res.Body.Bytes()), int64(res.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive.File) != 11 {
+		t.Fatalf("expected nine production plates plus manifest and instructions, got %d entries", len(archive.File))
+	}
+}
+
+func TestProductionGangRenderHandler(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/production/gang/render?name=Logo&sourceWidthMm=1.778&sourceHeightMm=1.778&sheetWidthMm=20&sheetHeightMm=20&copies=2&dpi=100&gapMm=1", bytes.NewReader(productionPNG(t)))
+	res := httptest.NewRecorder()
+	productionGangRender(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", res.Code, res.Body.String())
+	}
+	img, err := png.Decode(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Dx() != 79 || img.Bounds().Dy() != 79 || res.Header().Get("X-PrintStudio-Placement-Count") != "2" {
+		t.Fatal("unexpected server gang-sheet output")
 	}
 }

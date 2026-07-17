@@ -99,12 +99,15 @@ func main() {
 	mux.Handle("POST /v1/embroidery/export/dst", api.auth(http.HandlerFunc(exportEmbroidery)))
 	mux.Handle("GET /v1/production/capabilities", api.auth(http.HandlerFunc(productionCapabilities)))
 	mux.Handle("POST /v1/production/dtf/underbase", api.auth(http.HandlerFunc(productionUnderbase)))
+	mux.Handle("POST /v1/production/dtf/pack", api.auth(http.HandlerFunc(productionDTFPack)))
 	mux.Handle("POST /v1/production/screen/halftone", api.auth(http.HandlerFunc(productionHalftone)))
 	mux.Handle("POST /v1/production/screen/cmyk", api.auth(http.HandlerFunc(productionCMYK)))
+	mux.Handle("POST /v1/production/screen/pack", api.auth(http.HandlerFunc(productionScreenPack)))
 	mux.Handle("POST /v1/production/gang/nest", api.auth(http.HandlerFunc(productionNest)))
+	mux.Handle("POST /v1/production/gang/render", api.auth(http.HandlerFunc(productionGangRender)))
 	mux.Handle("POST /v1/production/vector/boolean", api.auth(http.HandlerFunc(productionBoolean)))
 	mux.Handle("POST /v1/production/vector/offset", api.auth(http.HandlerFunc(productionOffset)))
-	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: requestLog(cors(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: requestLog(cors(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second}
 	go func() {
 		log.Printf("PrintStudio API %s", server.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
