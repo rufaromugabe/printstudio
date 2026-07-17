@@ -71,6 +71,16 @@ func BuildDTFFiles(src image.Image, colorPNG []byte, config DTFPackConfig) ([]Ar
 	}, nil
 }
 
+func BuildSublimationFiles(colorPNG []byte) ([]ArtifactFile, error) {
+	if len(colorPNG) == 0 {
+		return nil, fmt.Errorf("sublimation package requires colour artwork")
+	}
+	return []ArtifactFile{
+		NewArtifact("print-ready.png", "sublimation-print", "image/png", colorPNG),
+		NewArtifact("README-sublimation.txt", "instructions", "text/plain", []byte("Sublimation package\r\n- print-ready.png includes configured bleed\r\n- Mirror on the RIP/printer if your press workflow requires it\r\n- No white underbase is included for dye-sub\r\n- Verify paper ICC / media profile on press\r\n")),
+	}, nil
+}
+
 func BuildScreenFiles(src image.Image, config ScreenPackConfig) ([]ArtifactFile, error) {
 	if config.DPI <= 0 {
 		config.DPI = 300

@@ -1,19 +1,22 @@
 import { EmbroideryPoint, EmbroideryRegion } from "./api";
+import { nearestThread, ThreadBrand } from "./thread-charts";
 
-export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag"};
+export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number};
 export type DigitizerView={canvasWidth:number;canvasHeight:number;physicalWidthMm:number;physicalHeightMm:number};
-export type Digitization={regions:EmbroideryRegion[];fallbacks:string[]};
+export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>};
 
 const MAX_IMAGE_THREADS=8;
 const ALPHA_CUTOFF=32;
 
-export async function digitizeElements(elements:DigitizerElement[],view:DigitizerView):Promise<Digitization>{
-  const regions:EmbroideryRegion[]=[],failures:string[]=[];
+export async function digitizeElements(elements:DigitizerElement[],view:DigitizerView,options?:{threadBrand?:ThreadBrand}):Promise<Digitization>{
+  const regions:EmbroideryRegion[]=[],failures:string[]=[],threadLabels:Record<string,string>={},brand=options?.threadBrand??"none";
   for(const element of elements){
     try{
       const layers=await extractColorLayers(element);
       if(!layers.length){failures.push(element.id);continue}
       for(const [layerIndex,layer] of layers.entries()){
+        const matched=nearestThread(layer.threadId,brand);
+        threadLabels[matched.hex]=matched.label;
         const polygons=groupRings(layer.rings);
         polygons.forEach((polygon,index)=>{
           const autoSatin=element.type==="text"&&polygons.length===1&&polygon.length<=2;
@@ -22,11 +25,11 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
           const satin=kind==="satin";
           regions.push({
             id:`${element.id}-${layerIndex}-${index}`,
-            threadId:layer.threadId,
+            threadId:matched.hex,
             geometry:{rings:polygon.map(r=>r.map(p=>toPhysical(p,element,view)))},
             kind,
             spacingMm:element.embroiderySpacing??.45,
-            stitchLengthMm:3,
+            stitchLengthMm:element.embroideryStitchLength??3,
             angleDegrees:element.embroideryAngle??0,
             edgeUnderlay:underlay==="edge"||(underlay==="auto"&&!satin),
             centerUnderlay:underlay==="center-zigzag"||(underlay==="auto"&&satin),
@@ -38,7 +41,7 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
   }
   if(failures.length)throw new Error(`${failures.length} layer(s) could not be traced into production contours. Re-upload artwork with CORS-readable pixels or convert to editable text/shapes — boundary rectangles are no longer accepted as a production fallback.`);
   if(!regions.length)throw new Error("No production contours were produced from the design.");
-  return{regions,fallbacks:[]};
+  return{regions,fallbacks:[],threadLabels};
 }
 
 type ColorLayer={threadId:string;rings:EmbroideryPoint[][]};

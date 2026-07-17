@@ -147,6 +147,28 @@ func (a *API) provisionGoogleIdentity(ctx context.Context, rawToken string) (Ide
 		return Identity{}, profile, err
 	}
 
+	// Accept the oldest pending invite for this email before creating a personal workspace.
+	var inviteID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id::text,workspace_id,role FROM invites
+		WHERE lower(email)=$1 AND accepted_at IS NULL
+		ORDER BY created_at ASC LIMIT 1`, email).Scan(&inviteID, &out.WorkspaceID, &out.Role)
+	if err == nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO memberships(workspace_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, out.WorkspaceID, out.UserID, out.Role); err != nil {
+			return Identity{}, profile, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE invites SET accepted_at=now() WHERE id::text=$1`, inviteID); err != nil {
+			return Identity{}, profile, err
+		}
+		if err = tx.Commit(); err != nil {
+			return Identity{}, profile, err
+		}
+		return out, profile, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Identity{}, profile, err
+	}
+
 	err = tx.QueryRowContext(ctx, `INSERT INTO workspaces(id,name) VALUES(gen_random_uuid(),$1) RETURNING id`, name+"'s Workspace").Scan(&out.WorkspaceID)
 	if err != nil {
 		return Identity{}, profile, err

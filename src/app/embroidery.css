@@ -22,6 +22,9 @@
 .embroidery-report>strong{font-size:20px;display:block}
 .embroidery-report>small{display:block;color:var(--muted);line-height:1.6;margin-top:7px}
 .trace-note{margin:12px 0 0;color:var(--muted);font-size:10px;line-height:1.45}
+.thread-legend{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0}
+.thread-legend span{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:10px}
+.thread-legend i{width:10px;height:10px;border-radius:50%;border:1px solid #0002}
 .approximation-note{background:#fff8e8;border:1px solid #ead9ab;border-radius:8px;padding:10px;font-size:11px;line-height:1.5}
 .embroidery-report ul{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:6px}
 .embroidery-report li{padding:9px 10px;border-radius:7px;background:#fff6f6;font-size:11px;line-height:1.4}

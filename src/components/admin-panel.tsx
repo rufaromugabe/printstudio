@@ -3,7 +3,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, AuditEvent, ICCProfile, Product, ProductionMetrics } from "@/lib/api";
 
-type AdminTab = "products" | "audit" | "metrics" | "icc";
+type AdminTab = "products" | "members" | "audit" | "metrics" | "icc";
+type Membership = { userId: string; email: string; displayName: string; role: string; kind: string; createdAt?: string };
 
 const METHOD_OPTIONS = ["DTF", "Screen print", "Vinyl", "Embroidery", "Sublimation"];
 const COMMON_ICC_IDS = [
@@ -55,6 +56,10 @@ export function AdminPanel({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [members, setMembers] = useState<Membership[]>([]);
+  const [membersState, setMembersState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
 
   const [productId, setProductId] = useState("");
   const [productName, setProductName] = useState("");
@@ -112,6 +117,18 @@ export function AdminPanel({
     }
   };
 
+  const loadMembers = async () => {
+    setMembersState("loading");
+    setError("");
+    try {
+      setMembers(await api.listMemberships());
+      setMembersState("ready");
+    } catch (err) {
+      setMembersState("error");
+      setError(err instanceof Error ? err.message : "Could not load members");
+    }
+  };
+
   const loadProfiles = async () => {
     setIccState("loading");
     setError("");
@@ -131,10 +148,11 @@ export function AdminPanel({
   };
 
   useEffect(() => {
+    if (tab === "members" && membersState === "idle") void loadMembers();
     if (tab === "audit" && auditState === "idle") void loadAudit();
     if (tab === "metrics" && metricsState === "idle") void loadMetrics();
     if (tab === "icc" && iccState === "idle") void loadProfiles();
-  }, [tab, auditState, metricsState, iccState]);
+  }, [tab, membersState, auditState, metricsState, iccState]);
 
   const saveProduct = async (event: FormEvent) => {
     event.preventDefault();
@@ -205,12 +223,13 @@ export function AdminPanel({
       <div className="panel-title">
         <p className="eyebrow">ADMIN</p>
         <h2>Workspace controls</h2>
-        <p>Manage catalog products, review audit activity, inspect production metrics, and refresh common ICC profiles.</p>
+        <p>Manage catalog products, members, audit activity, production metrics, and common ICC profiles — separate from the design editor.</p>
       </div>
 
       <div className="admin-tabs" role="tablist" aria-label="Admin sections">
         {([
           ["products", "Products"],
+          ["members", "Members"],
           ["audit", "Audit"],
           ["metrics", "Metrics"],
           ["icc", "ICC"],
@@ -229,54 +248,139 @@ export function AdminPanel({
 
       {tab === "products" && (
         <div className="admin-section">
-          <div className="panel-section-head">
-            <strong>Catalog</strong>
-            <span>{products.length}</span>
-          </div>
-          <div className="admin-product-list">
-            <button type="button" className={!productId ? "active" : ""} onClick={() => loadProduct(null)}>
-              + New product
-            </button>
-            {products.map((product) => (
-              <button key={product.id} type="button" className={productId === product.id ? "active" : ""} onClick={() => loadProduct(product)}>
-                <strong>{product.name}</strong>
-                <small>{product.id} · {product.active ? "active" : "inactive"}</small>
-              </button>
-            ))}
-          </div>
-
-          <form className="admin-form" onSubmit={(event) => void saveProduct(event)}>
-            <label>
-              Product id
-              <input value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="classic-tee" required pattern="[a-z][a-z0-9_-]{0,63}" />
-            </label>
-            <label>
-              Name
-              <input value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="Classic Tee" required />
-            </label>
-            <fieldset>
-              <legend>Methods</legend>
-              <div className="admin-chip-row">
-                {METHOD_OPTIONS.map((method) => (
-                  <label key={method} className="admin-chip">
-                    <input type="checkbox" checked={methods.includes(method)} onChange={() => toggleMethod(method)} />
-                    {method}
-                  </label>
+          <div className="admin-layout">
+            <div>
+              <div className="panel-section-head">
+                <strong>Catalog</strong>
+                <span>{products.length}</span>
+              </div>
+              <div className="admin-product-list">
+                <button type="button" className={!productId ? "active" : ""} onClick={() => loadProduct(null)}>
+                  + New product
+                </button>
+                {products.map((product) => (
+                  <button key={product.id} type="button" className={productId === product.id ? "active" : ""} onClick={() => loadProduct(product)}>
+                    <strong>{product.name}</strong>
+                    <small>{product.id} · {product.active ? "active" : "inactive"}</small>
+                  </button>
                 ))}
               </div>
-            </fieldset>
-            <label className="admin-check">
-              <input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} />
-              Active in studio catalog
-            </label>
-            <label>
-              Template JSON
-              <textarea className="admin-template" value={templateJson} onChange={(event) => setTemplateJson(event.target.value)} spellCheck={false} />
-            </label>
-            <button className="button primary panel-action" type="submit" disabled={busy}>
-              {busy ? "Saving…" : "Save product"}
+            </div>
+            <form className="admin-form" onSubmit={(event) => void saveProduct(event)}>
+              <label>
+                Product id
+                <input value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="classic-tee" required pattern="[a-z][a-z0-9_-]{0,63}" />
+              </label>
+              <label>
+                Name
+                <input value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="Classic Tee" required />
+              </label>
+              <fieldset>
+                <legend>Methods</legend>
+                <div className="admin-chip-row">
+                  {METHOD_OPTIONS.map((method) => (
+                    <label key={method} className="admin-chip">
+                      <input type="checkbox" checked={methods.includes(method)} onChange={() => toggleMethod(method)} />
+                      {method}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <label className="admin-check">
+                <input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} />
+                Active in studio catalog
+              </label>
+              <label>
+                Template JSON
+                <textarea className="admin-template" value={templateJson} onChange={(event) => setTemplateJson(event.target.value)} spellCheck={false} />
+              </label>
+              <button className="button primary panel-action" type="submit" disabled={busy}>
+                {busy ? "Saving…" : "Save product"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {tab === "members" && (
+        <div className="admin-section">
+          <div className="panel-section-head">
+            <strong>Members & invites</strong>
+            <button type="button" className="admin-refresh" onClick={() => void loadMembers()} disabled={membersState === "loading"}>
+              Refresh
             </button>
+          </div>
+          <form className="admin-invite" onSubmit={(event) => {
+            event.preventDefault();
+            void (async () => {
+              setBusy(true); setMessage(""); setError("");
+              try {
+                await api.inviteMembership(inviteEmail.trim(), inviteRole);
+                setInviteEmail("");
+                setMessage(`Invited ${inviteEmail.trim()} as ${inviteRole}`);
+                await loadMembers();
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Invite failed");
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}>
+            <label>Email<input type="email" required value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="teammate@studio.com" /></label>
+            <label>Role<select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option></select></label>
+            <button className="button primary" type="submit" disabled={busy}>{busy ? "Saving…" : "Invite"}</button>
           </form>
+          <p className="admin-note">Existing users are added immediately. New emails become pending invites and join this workspace on next Google sign-in. Viewers can browse but not save, upload, or export.</p>
+          {membersState === "loading" && <div className="panel-empty">Loading members…</div>}
+          {membersState === "error" && <div className="panel-empty"><strong>Members unavailable</strong><span>{error || "Try again shortly."}</span></div>}
+          {membersState === "ready" && (
+            <div className="admin-members">
+              {members.map((row) => (
+                <div className="admin-member-row" key={`${row.kind}-${row.userId}`}>
+                  <div>
+                    <strong>{row.displayName || row.email}</strong>
+                    <small>{row.email} · {row.kind === "invite" ? "Pending invite" : row.role}</small>
+                  </div>
+                  {row.role === "owner" ? <span>Owner</span> : (
+                    <select value={row.role} disabled={row.kind === "invite" || busy} onChange={(e) => {
+                      void (async () => {
+                        setBusy(true); setError("");
+                        try {
+                          await api.updateMembership(row.userId, e.target.value);
+                          await loadMembers();
+                          setMessage(`Updated ${row.email} to ${e.target.value}`);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Role update failed");
+                        } finally {
+                          setBusy(false);
+                        }
+                      })();
+                    }}>
+                      <option value="admin">Admin</option>
+                      <option value="member">Member</option>
+                      <option value="viewer">Viewer</option>
+                    </select>
+                  )}
+                  {row.role === "owner" ? <span /> : (
+                    <button type="button" className="button secondary danger" disabled={busy} onClick={() => {
+                      void (async () => {
+                        setBusy(true); setError("");
+                        try {
+                          await api.removeMembership(row.userId);
+                          await loadMembers();
+                          setMessage(`Removed ${row.email}`);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Remove failed");
+                        } finally {
+                          setBusy(false);
+                        }
+                      })();
+                    }}>Remove</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

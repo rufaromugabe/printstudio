@@ -123,6 +123,47 @@ func productionDTFPack(w http.ResponseWriter, r *http.Request) {
 	packDTF(w, r, data, src)
 }
 
+func productionSublimationPackHandler(a *API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data, src, ok := decodeProductionPNG(w, r)
+		if !ok {
+			return
+		}
+		digest := sha256Hex(data)
+		if err := requireApprovedProof(a, r, r.URL.Query().Get("proofId"), digest); err != nil {
+			prod.DefaultMetrics.Failures.Add(1)
+			problem(w, http.StatusConflict, err.Error())
+			return
+		}
+		packSublimation(w, r, data, src)
+	}
+}
+
+func packSublimation(w http.ResponseWriter, r *http.Request, data []byte, src image.Image) {
+	if err := validateRasterMetadata(r, src.Bounds()); err != nil {
+		problem(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	presetID := strings.TrimSpace(r.URL.Query().Get("trapPreset"))
+	if presetID == "" {
+		presetID = "sublimation-paper-standard"
+	}
+	if preset, err := prod.LookupTrapPreset(presetID); err != nil || preset.Method != "Sublimation" {
+		problem(w, http.StatusUnprocessableEntity, "trap preset must be a sublimation recipe")
+		return
+	}
+	files, err := prod.BuildSublimationFiles(data)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "sublimation package generation failed")
+		return
+	}
+	metadata := productionMetadata(r, src.Bounds())
+	metadata["sublimation"] = map[string]any{"trapPreset": presetID, "bleedIncluded": true, "underbase": false}
+	metadata["warning"] = "Confirm paper ICC, mirror setting and press temperature with your sublimation workflow."
+	prod.DefaultMetrics.Packs.Add(1)
+	writeProductionArchive(w, safeProductionName(r.URL.Query().Get("name"))+"-sublimation-package.zip", "Sublimation", files, metadata)
+}
+
 func packDTF(w http.ResponseWriter, r *http.Request, data []byte, src image.Image) {
 	spread := integerQuery(r, "spread", 2)
 	threshold := integerQuery(r, "threshold", 1)
