@@ -15,6 +15,37 @@ export async function createGangSheet(_result:ProductionResult,_sheetWidthMM:num
   throw new Error("Browser gang-sheet compositing is disabled because it degrades placement quality. Use the server MaxRects gang renderer.");
 }
 
+/** DPI implied by the production PNG and its declared millimetre size. */
+export function nativeProductionDPI(result:ProductionResult):number{
+  if(result.pixelWidth&&result.widthMM>0){
+    const dpi=result.pixelWidth/(result.widthMM/25.4);
+    return Math.max(72,Math.min(1200,Math.round(dpi)));
+  }
+  if(result.pixelHeight&&result.heightMM>0){
+    const dpi=result.pixelHeight/(result.heightMM/25.4);
+    return Math.max(72,Math.min(1200,Math.round(dpi)));
+  }
+  return 300;
+}
+
+/** Downscale a production PNG so its pixels match width/height mm at targetDpi (for fast sheet previews). */
+export async function scaleProductionPngToDpi(blob:Blob,widthMm:number,heightMm:number,targetDpi:number):Promise<Blob>{
+  const w=Math.max(1,Math.ceil(widthMm/25.4*targetDpi));
+  const h=Math.max(1,Math.ceil(heightMm/25.4*targetDpi));
+  const bitmap=await createImageBitmap(blob);
+  if(Math.abs(bitmap.width-w)<=2&&Math.abs(bitmap.height-h)<=2){bitmap.close();return blob}
+  if(bitmap.width<w-2||bitmap.height<h-2){bitmap.close();throw new Error("Source is lower resolution than requested DPI")}
+  const canvas=document.createElement("canvas");
+  canvas.width=w;canvas.height=h;
+  const ctx=canvas.getContext("2d");
+  if(!ctx){bitmap.close();throw new Error("Raster renderer unavailable")}
+  ctx.imageSmoothingEnabled=true;
+  ctx.imageSmoothingQuality="high";
+  ctx.drawImage(bitmap,0,0,w,h);
+  bitmap.close();
+  return canvasBlob(canvas,"image/png");
+}
+
 export async function recordArtifact(result:ProductionResult,blob:Blob,fileName=result.fileName):Promise<ExportRecord>{const sha256=await hashBlob(blob),record:ExportRecord={id:crypto.randomUUID(),createdAt:new Date().toISOString(),method:result.method,format:blob.type||result.mime,fileName,size:blob.size,sha256,widthMM:result.widthMM,heightMM:result.heightMM,warnings:result.warnings.length};const db=await database();await transaction(db,"readwrite",store=>store.put({...record,blob}));return record}
 export async function listArtifacts():Promise<ExportRecord[]>{const db=await database();const rows=await transaction<({blob:Blob}&ExportRecord)[]>(db,"readonly",store=>store.getAll());return rows.map(row=>({id:row.id,createdAt:row.createdAt,method:row.method,format:row.format,fileName:row.fileName,size:row.size,sha256:row.sha256,widthMM:row.widthMM,heightMM:row.heightMM,warnings:row.warnings})).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))}
 export async function artifactBlob(id:string):Promise<{blob:Blob;fileName:string}|null>{const db=await database();const row=await transaction<({blob:Blob}&ExportRecord)|undefined>(db,"readonly",store=>store.get(id));return row?{blob:row.blob,fileName:row.fileName}:null}

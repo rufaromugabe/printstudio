@@ -1,8 +1,8 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- previews use generated blob URLs and signed uploads. */
 
-import { ChangeEvent, PointerEvent, useEffect, useRef, useState } from "react";
-import { api, Asset, EmbroideryCompilation, EmbroideryRequest, Product } from "@/lib/api";
+import { ChangeEvent, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { api, Asset, EmbroideryCompilation, EmbroideryRequest, Product, ProductView } from "@/lib/api";
 import { AdminPanel } from "@/components/admin-panel";
 import { GoogleLogin } from "@/components/google-login";
 import { fetchSessionUser, getSessionUser, hasSession, isAdminRole, logoutSession, SessionUser } from "@/lib/auth";
@@ -10,17 +10,26 @@ import { digitizeElements } from "@/lib/embroidery-digitizer";
 import { ThreadBrand } from "@/lib/thread-charts";
 import { cleanImageBackground, inspectImageBackground } from "@/lib/image-background";
 import { prepareProductionExport, ProductionMethod, ProductionResult } from "@/lib/production-export";
-import { artifactBlob, createPDF, createProductionPackage, createTIFF, ExportRecord, listArtifacts, rasterizeArtifact, recordArtifact } from "@/lib/production-packaging";
+import { artifactBlob, createPDF, createProductionPackage, createTIFF, ExportRecord, listArtifacts, nativeProductionDPI, rasterizeArtifact, recordArtifact, scaleProductionPngToDpi } from "@/lib/production-packaging";
+import { alignViewCanvas, remapElementBox, viewCanvasSignature } from "@/lib/view-geometry";
 
 type BackgroundPrompt = { elementId: string; previewUrl: string; busy: boolean };
 
 type Side = string;
 type SidebarPanel = "design"|"templates"|"elements"|"uploads"|"imagine"|"admin"|"help";
 type Element = { id: string; type: "text" | "image"; value: string; assetId?: string; sourceWidth?:number; sourceHeight?:number; x: number; y: number; w: number; h: number; rotation: number; color: string; fontSize: number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";textDecoration?:"none"|"underline";textAlign?:"left"|"center"|"right";letterSpacing?:number;lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";curvePosition?:"outside"|"inside";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number };
-type Design = { name: string; product: string; productId?:string;productProperties:Record<string,string|number|boolean>; color: string; method: string; side: Side; elements: Record<Side, Element[]> };
+type Design = { name: string; product: string; productId?:string;productProperties:Record<string,string|number|boolean>; color: string; method: string; side: Side; elements: Record<Side, Element[]>; viewCanvas?: Record<string, string> };
 
 const COLORS = ["#f4f1e9", "#17191c", "#d8b7ab", "#c8cfbc", "#203d63"];
-const initial: Design = { name: "Untitled design", product: "Classic Tee",productId:"classic-tee",productProperties:{size:"M",fit:"regular",fabric:"cotton"}, color: "#f4f1e9", method: "DTF", side: "front", elements: { front: [{ id: "welcome", type: "text", value: "MAKE IT YOURS", x: 115, y: 155, w: 190, h: 55, rotation: 0, color: "#222222", fontSize: 24 }], back: [] } };
+const FALLBACK_VIEWS: ProductView[] = [
+  {id:"front",label:"Front",canvasWidth:345,canvasHeight:460,physicalWidthMm:300,physicalHeightMm:400,safeMarginMm:8,bleedMm:3,mockup:{kind:"shirt"}},
+  {id:"back",label:"Back",canvasWidth:345,canvasHeight:460,physicalWidthMm:300,physicalHeightMm:400,safeMarginMm:8,bleedMm:3,mockup:{kind:"shirt"}},
+];
+/** Pre-alignment canvas sizes for designs saved before viewCanvas tracking. */
+const LEGACY_VIEW_CANVAS: Record<string, Record<string, string>> = {
+  "classic-tee": {front:"420x460",back:"420x460",left_sleeve:"240x300",right_sleeve:"240x300"},
+};
+const initial: Design = { name: "Untitled design", product: "Classic Tee",productId:"classic-tee",productProperties:{size:"M",fit:"regular",fabric:"cotton"}, color: "#f4f1e9", method: "DTF", side: "front", viewCanvas:{front:"345x460",back:"345x460"}, elements: { front: [{ id: "welcome", type: "text", value: "MAKE IT YOURS", x: 94, y: 155, w: 156, h: 55, rotation: 0, color: "#222222", fontSize: 24 }], back: [] } };
 
 const TEMPLATE_PRESETS=[
   {id:"bold-statement",name:"Bold statement",description:"Large headline with a small supporting line",create:(view:{canvasWidth:number;canvasHeight:number}):Element[]=>[
@@ -98,19 +107,54 @@ export default function Home() {
   const hydrated = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const selectedProduct=products.find(p=>p.id===design.productId)||products.find(p=>p.name===design.product);
-  const configuredViews=selectedProduct?.template?.views?.length?selectedProduct.template.views:[{id:"front",label:"Front",canvasWidth:420,canvasHeight:460,physicalWidthMm:300,physicalHeightMm:400,safeMarginMm:8,bleedMm:3,mockup:{kind:"shirt"}},{id:"back",label:"Back",canvasWidth:420,canvasHeight:460,physicalWidthMm:300,physicalHeightMm:400,safeMarginMm:8,bleedMm:3,mockup:{kind:"shirt"}}];
+  const rawViews=selectedProduct?.template?.views?.length?selectedProduct.template.views:FALLBACK_VIEWS;
+  const viewSourceKey=`${design.productId??design.product}|${rawViews.map(v=>`${v.id}:${v.canvasWidth}x${v.canvasHeight}:${v.physicalWidthMm}x${v.physicalHeightMm}`).join(",")}`;
+  const configuredViews=useMemo(()=>rawViews.map(view=>alignViewCanvas(view)),[viewSourceKey]);
+  const canvasSyncState=configuredViews.map(v=>`${v.id}:${design.viewCanvas?.[v.id]??""}`).join("|");
   const currentView=configuredViews.find(v=>v.id===design.side)??configuredViews[0];
   const active = design.elements[design.side]??[];
   const selectedElement = active.find((item) => item.id === selected);
   const mockupKind=currentView.mockup?.kind??"shirt";
+  // Canvas is aligned to physical aspect, so stage pixels match export proportions 1:1.
   const printDisplayH=currentView.canvasHeight;
-  const printDisplayW=Math.max(80,Math.round(printDisplayH*(currentView.physicalWidthMm/Math.max(1,currentView.physicalHeightMm))));
-  const viewScaleX=printDisplayW/Math.max(1,currentView.canvasWidth);
-  const viewScaleY=printDisplayH/Math.max(1,currentView.canvasHeight);
+  const printDisplayW=currentView.canvasWidth;
+  const viewScaleX=1;
+  const viewScaleY=1;
+  const safeInsetX=(currentView.safeMarginMm/Math.max(1,currentView.physicalWidthMm))*printDisplayW;
+  const safeInsetY=(currentView.safeMarginMm/Math.max(1,currentView.physicalHeightMm))*printDisplayH;
   const framePadX=mockupKind==="sleeve"?36:70;
   const framePadY=mockupKind==="sleeve"?48:72;
   const stageW=printDisplayW+framePadX*2;
   const stageH=printDisplayH+framePadY*2;
+
+  useEffect(()=>{
+    const views=selectedProduct?.template?.views?.length?selectedProduct.template.views:FALLBACK_VIEWS;
+    const alignedViews=views.map(view=>alignViewCanvas(view));
+    setDesign(current=>{
+      const productKey=current.productId??"";
+      const nextCanvas:{[key:string]:string}={...(current.viewCanvas??{})};
+      const nextElements:{[key:string]:Element[]}={...current.elements};
+      let changed=false;
+      views.forEach((raw,index)=>{
+        const aligned=alignedViews[index]??alignViewCanvas(raw);
+        const toSig=viewCanvasSignature(aligned);
+        const fromSig=nextCanvas[raw.id]??LEGACY_VIEW_CANVAS[productKey]?.[raw.id]??viewCanvasSignature(raw);
+        if(fromSig!==toSig){
+          const [fromW,fromH]=fromSig.split("x").map(Number);
+          if(fromW>0&&fromH>0){
+            nextElements[raw.id]=(nextElements[raw.id]??[]).map(element=>remapElementBox(element,{canvasWidth:fromW,canvasHeight:fromH},aligned));
+            changed=true;
+          }
+        }
+        if(nextCanvas[raw.id]!==toSig){
+          nextCanvas[raw.id]=toSig;
+          changed=true;
+        }
+      });
+      if(!changed)return current;
+      return{...current,elements:nextElements,viewCanvas:nextCanvas};
+    });
+  },[viewSourceKey,canvasSyncState,selectedProduct]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -231,7 +275,7 @@ export default function Home() {
   const insertAsset=async(asset:Asset)=>{let url=asset.url;if(!url)url=(await api.assetURL(asset.id)).url;const ratio=asset.width/asset.height;const w=ratio>=1?180:180*ratio;const h=ratio>=1?180/ratio:180;const el=withEmbroideryDefaults({id:crypto.randomUUID(),type:"image",value:url,assetId:asset.id,sourceWidth:asset.width,sourceHeight:asset.height,x:Math.max(0,(currentView.canvasWidth-w)/2),y:Math.max(0,(currentView.canvasHeight-h)/2),w,h,rotation:0,color:"",fontSize:0});commit(d=>({...d,elements:{...d.elements,[d.side]:[...(d.elements[d.side]??[]),el]}}));setSelected(el.id);setUploadState(`${asset.width} × ${asset.height}px added`);void suggestBackgroundCleanup(el.id,url)};
   const uploadFile=async(file:File)=>{if(!["image/png","image/jpeg"].includes(file.type)){setUploadState("Choose a PNG or JPG file.");return}if(file.size>25*1024*1024){setUploadState("Artwork must be 25 MB or smaller.");return}setUploadState("Uploading and validating…");try{const asset=await api.uploadAsset(file);setAssets(items=>[asset,...items.filter(item=>item.id!==asset.id)]);setAssetState("ready");await insertAsset(asset)}catch(error){setUploadState(error instanceof Error?error.message:"Upload rejected")}};
   const upload=async(event:ChangeEvent<HTMLInputElement>)=>{const file=event.target.files?.[0];if(file)await uploadFile(file);event.target.value=""};
-  const selectProduct=(productId:string)=>{const product=products.find(item=>item.id===productId);if(!product)return;const elements={...design.elements};product.template.views.forEach(view=>{elements[view.id]??=[]});const props=Object.fromEntries(product.template.properties.map(property=>[property.id,property.options?.[0]?.value??""]));commit(d=>({...d,product:product.name,productId:product.id,productProperties:props,side:product.template.views[0]?.id??"front",elements,method:product.methods[0]??d.method,color:product.template.colors[0]?.value??d.color}));setSelected(null)};
+  const selectProduct=(productId:string)=>{const product=products.find(item=>item.id===productId);if(!product)return;const elements={...design.elements};const viewCanvas:Record<string,string>={};product.template.views.forEach(view=>{elements[view.id]??=[];viewCanvas[view.id]=viewCanvasSignature(alignViewCanvas(view))});const props=Object.fromEntries(product.template.properties.map(property=>[property.id,property.options?.[0]?.value??""]));commit(d=>({...d,product:product.name,productId:product.id,productProperties:props,side:product.template.views[0]?.id??"front",elements,viewCanvas,method:product.methods[0]??d.method,color:product.template.colors[0]?.value??d.color}));setSelected(null)};
   const applyTemplate=(preset:(typeof TEMPLATE_PRESETS)[number])=>{const additions=preset.create(currentView);commit(d=>({...d,elements:{...d.elements,[d.side]:[...(d.elements[d.side]??[]),...additions]}}));setSelected(additions[0]?.id??null)};
   const addShape=(kind:"circle"|"rectangle"|"star"|"divider"|"badge")=>{const shapes={circle:`<circle cx="128" cy="128" r="116"/>`,rectangle:`<rect x="12" y="36" width="232" height="184" rx="22"/>`,star:`<path d="M128 8l29 78 83 4-65 52 22 80-69-45-69 45 22-80-65-52 83-4z"/>`,divider:`<rect x="8" y="110" width="240" height="36" rx="18"/>`,badge:`<path fill-rule="evenodd" d="M128 8a120 120 0 1 0 0 240 120 120 0 0 0 0-240zm0 25a95 95 0 1 1 0 190 95 95 0 0 1 0-190z"/>`};const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="#17201d">${shapes[kind]}</svg>`;const wide=kind==="divider"||kind==="rectangle",w=wide?180:130,h=kind==="divider"?36:wide?120:130;const el=withEmbroideryDefaults({id:crypto.randomUUID(),type:"image",value:`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,sourceWidth:256,sourceHeight:256,x:(currentView.canvasWidth-w)/2,y:(currentView.canvasHeight-h)/2,w,h,rotation:0,color:"",fontSize:0});commit(d=>({...d,elements:{...d.elements,[d.side]:[...(d.elements[d.side]??[]),el]}}));setSelected(el.id)};
   const duplicateElement=(element:Element)=>{const copy={...element,id:crypto.randomUUID(),x:element.x+12,y:element.y+12};commit(d=>({...d,elements:{...d.elements,[d.side]:[...(d.elements[d.side]??[]),copy]}}));setSelected(copy.id)};
@@ -281,7 +325,7 @@ export default function Home() {
     setProofId(approved.id);setProofState("approved");
     return approved.id;
   };
-  const createAlternate=async(format:"pdf"|"tiff"|"zip"|"gang")=>{if(!production)return;setFormatState(format);setProductionError("");try{const stem=production.fileName.replace(/\.[^.]+$/,"");if(format==="pdf")await downloadBlob(await createPDF(production),`${stem}.pdf`);if(format==="tiff")await downloadBlob(await createTIFF(production),`${stem}.tiff`);if(format==="zip"){const approvedProofId=await ensureApprovedProof();if(production.method==="DTF")await downloadBlob(await api.productionDTFPack(production.blob,{name:design.name,widthMm:production.widthMM,heightMm:production.heightMM,spread:dtfUnderbaseSpread,trapPreset:dtfTrapPreset,proofId:approvedProofId||undefined}),`${stem}-dtf-package.zip`);else if(production.method==="Sublimation"){const combo=iccCombinations.find(c=>c.id===iccCombo)??iccCombinations[0];await downloadBlob(await api.productionSublimationPack(production.blob,{name:design.name,widthMm:production.widthMM,heightMm:production.heightMM,trapPreset:"sublimation-paper-standard",proofId:approvedProofId||undefined,sourceProfile:combo.sourceProfile,destinationProfile:combo.destinationProfile}),`${stem}-sublimation-package.zip`)}else if(production.method==="Screen print"){const source=await rasterizeArtifact(production);const caps=await api.productionCapabilities().catch(()=>null);const combo=iccCombinations.find(c=>c.id===iccCombo)??iccCombinations[0];const iccOpts=caps?.icc?{sourceProfile:combo.sourceProfile,destinationProfile:combo.destinationProfile}:{allowUncalibrated:true as const};await downloadBlob(await api.productionScreenPack(source,{name:design.name,widthMm:production.widthMM,heightMm:production.heightMM,lpi:screenLpi,screening:screenMode,trapPreset:screenTrapPreset,...iccOpts,proofId:approvedProofId||undefined}),`${stem}-screen-package.zip`)}else await downloadBlob(await createProductionPackage(production),`${stem}-package.zip`)}if(format==="gang"){const source=production.mime==="image/png"?production.blob:await rasterizeArtifact(production);const sheet=chooseGangSheet(production.widthMM,production.heightMM,gangWidth,gangHeight);if(sheet.width!==gangWidth||sheet.height!==gangHeight){setGangWidth(sheet.width);setGangHeight(sheet.height)}await downloadBlob(await api.productionGangRender(source,{name:design.name,sourceWidthMm:production.widthMM,sourceHeightMm:production.heightMM,sheetWidthMm:sheet.width,sheetHeightMm:sheet.height,copies:gangFillSheet?1:gangCopies,fillSheet:gangFillSheet,gapMm:gangGap,allowRotate:true}),`${stem}-sheet-${sheet.width}x${sheet.height}mm${gangFillSheet?"-filled":`-x${gangCopies}`}.png`)}}catch(error){setProductionError(error instanceof Error?error.message:"Format generation failed")}finally{setFormatState("")}};
+  const createAlternate=async(format:"pdf"|"tiff"|"zip"|"gang")=>{if(!production)return;setFormatState(format);setProductionError("");try{const stem=production.fileName.replace(/\.[^.]+$/,"");if(format==="pdf")await downloadBlob(await createPDF(production),`${stem}.pdf`);if(format==="tiff")await downloadBlob(await createTIFF(production),`${stem}.tiff`);if(format==="zip"){const approvedProofId=await ensureApprovedProof();if(production.method==="DTF")await downloadBlob(await api.productionDTFPack(production.blob,{name:design.name,widthMm:production.widthMM,heightMm:production.heightMM,spread:dtfUnderbaseSpread,trapPreset:dtfTrapPreset,proofId:approvedProofId||undefined}),`${stem}-dtf-package.zip`);else if(production.method==="Sublimation"){const combo=iccCombinations.find(c=>c.id===iccCombo)??iccCombinations[0];await downloadBlob(await api.productionSublimationPack(production.blob,{name:design.name,widthMm:production.widthMM,heightMm:production.heightMM,trapPreset:"sublimation-paper-standard",proofId:approvedProofId||undefined,sourceProfile:combo.sourceProfile,destinationProfile:combo.destinationProfile}),`${stem}-sublimation-package.zip`)}else if(production.method==="Screen print"){const source=await rasterizeArtifact(production);const caps=await api.productionCapabilities().catch(()=>null);const combo=iccCombinations.find(c=>c.id===iccCombo)??iccCombinations[0];const iccOpts=caps?.icc?{sourceProfile:combo.sourceProfile,destinationProfile:combo.destinationProfile}:{allowUncalibrated:true as const};await downloadBlob(await api.productionScreenPack(source,{name:design.name,widthMm:production.widthMM,heightMm:production.heightMM,lpi:screenLpi,screening:screenMode,trapPreset:screenTrapPreset,...iccOpts,proofId:approvedProofId||undefined}),`${stem}-screen-package.zip`)}else await downloadBlob(await createProductionPackage(production),`${stem}-package.zip`)}if(format==="gang"){const source=production.mime==="image/png"?production.blob:await rasterizeArtifact(production);const sheet=chooseGangSheet(production.widthMM,production.heightMM,gangWidth,gangHeight);if(sheet.width!==gangWidth||sheet.height!==gangHeight){setGangWidth(sheet.width);setGangHeight(sheet.height)}await downloadBlob(await api.productionGangRender(source,{name:design.name,sourceWidthMm:production.widthMM,sourceHeightMm:production.heightMM,sheetWidthMm:sheet.width,sheetHeightMm:sheet.height,copies:gangFillSheet?1:gangCopies,fillSheet:gangFillSheet,gapMm:gangGap,allowRotate:true,dpi:nativeProductionDPI(production)}),`${stem}-sheet-${sheet.width}x${sheet.height}mm${gangFillSheet?"-filled":`-x${gangCopies}`}.png`)}}catch(error){setProductionError(error instanceof Error?error.message:"Format generation failed")}finally{setFormatState("")}};
   const createAdvanced=async(kind:"underbase"|"halftone"|"halftone-fm"|"cmyk")=>{if(!production)return;setFormatState(kind);setProductionError("");try{const source=await rasterizeArtifact(production),stem=production.fileName.replace(/\.[^.]+$/,"");if(kind==="underbase")await downloadBlob(await api.productionUnderbase(source,dtfUnderbaseSpread),`${stem}-white-underbase-spread${dtfUnderbaseSpread}.png`);if(kind==="halftone")await downloadBlob(await api.productionHalftone(source,300,screenLpi,22.5,1,"am"),`${stem}-${screenLpi}lpi-22.5deg-halftone.png`);if(kind==="halftone-fm")await downloadBlob(await api.productionHalftone(source,300,screenLpi,22.5,1,"fm"),`${stem}-fm-stochastic-halftone.png`);if(kind==="cmyk")await downloadBlob(await api.productionCMYK(source),`${stem}-cmyk-preview-uncalibrated.zip`)}catch(error){setProductionError(error instanceof Error?error.message:"Production processing failed")}finally{setFormatState("")}};
   const redownload=async(record:ExportRecord)=>{const artifact=await artifactBlob(record.id);if(!artifact)return;const url=URL.createObjectURL(artifact.blob),link=document.createElement("a");link.href=url;link.download=artifact.fileName;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000)};
 
@@ -332,7 +376,7 @@ export default function Home() {
         <div className="view-tabs">{configuredViews.map(view=><button key={view.id} className={design.side===view.id?"active":""} onClick={()=>{setDesign({...design,side:view.id,elements:{...design.elements,[view.id]:design.elements[view.id]??[]}});setSelected(null)}}>{view.label}</button>)}</div>
         <div className="stage" style={{transform:`scale(${zoom})`,"--stage-w":`${stageW}px`,"--stage-h":`${stageH}px`,"--print-w":`${printDisplayW}px`,"--print-h":`${printDisplayH}px`,"--pad-x":`${framePadX}px`,"--pad-y":`${framePadY}px`,"--shirt":design.color} as React.CSSProperties} onPointerDown={() => setSelected(null)}>
           <div className={`shirt ${mockupKind}`}><div className="sleeve left"/><div className="sleeve right"/><div className="neck"/><div className="fabric"/></div>
-          <div className="print-area"><span className="area-label">PRINT AREA · {Math.round(currentView.physicalWidthMm/10)} × {Math.round(currentView.physicalHeightMm/10)} CM</span>{active.map((el) => <CanvasElement key={el.id} element={el} selected={selected === el.id} onSelect={() => setSelected(el.id)} onChange={(patch) => patchElement(el.id,patch,true)} canvasWidth={currentView.canvasWidth} canvasHeight={currentView.canvasHeight} scaleX={viewScaleX} scaleY={viewScaleY} zoom={zoom} />)}</div>
+          <div className="print-area" style={{"--safe-inset-x":`${safeInsetX}px`,"--safe-inset-y":`${safeInsetY}px`} as React.CSSProperties}><span className="area-label">PRINT AREA · {Math.round(currentView.physicalWidthMm/10)} × {Math.round(currentView.physicalHeightMm/10)} CM</span><div className="safe-area" aria-hidden="true"/>{active.map((el) => <CanvasElement key={el.id} element={el} selected={selected === el.id} onSelect={() => setSelected(el.id)} onChange={(patch) => patchElement(el.id,patch,true)} canvasWidth={currentView.canvasWidth} canvasHeight={currentView.canvasHeight} scaleX={viewScaleX} scaleY={viewScaleY} zoom={zoom} />)}</div>
         </div>
         <div className="zoom"><button onClick={()=>setZoom(Math.max(.5,zoom-.1))}>−</button><span>{Math.round(zoom*100)}%</span><button onClick={()=>setZoom(Math.min(1.3,zoom+.1))}>＋</button><button onClick={()=>setZoom(.9)}>⌗</button></div>
       </section>
@@ -388,7 +432,10 @@ function ProductionDialog({production,state,error,method,iccCombo,setIccCombo,ic
     setSheetPreviewError("");
     const timer=window.setTimeout(async()=>{
       try{
-        const source=production.mime==="image/png"?production.blob:await rasterizeArtifact(production);
+        // Preview nests at 72 DPI: downscale the 300 DPI artwork first so pixels match mm×DPI.
+        const previewDpi=72;
+        const full=production.mime==="image/png"?production.blob:await rasterizeArtifact(production);
+        const source=await scaleProductionPngToDpi(full,production.widthMM,production.heightMM,previewDpi);
         const blob=await api.productionGangRender(source,{
           name:"sheet-preview",
           sourceWidthMm:production.widthMM,
@@ -399,7 +446,7 @@ function ProductionDialog({production,state,error,method,iccCombo,setIccCombo,ic
           fillSheet:gang.fillSheet,
           gapMm:gang.gap,
           allowRotate:true,
-          dpi:72,
+          dpi:previewDpi,
         });
         if(cancelled)return;
         const url=URL.createObjectURL(blob);

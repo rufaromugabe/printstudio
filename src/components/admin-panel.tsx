@@ -20,7 +20,7 @@ const emptyTemplate = `{
     {
       "id": "front",
       "label": "Front",
-      "canvasWidth": 420,
+      "canvasWidth": 345,
       "canvasHeight": 460,
       "physicalWidthMm": 300,
       "physicalHeightMm": 400,
