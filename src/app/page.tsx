@@ -336,7 +336,8 @@ export default function Home() {
         {selectedElement ? <>
           <label className="prop-label">{selectedElement.type === "text" ? "CONTENT" : "SIZE"}</label>
           {selectedElement.type === "text" && <><textarea value={selectedElement.value} onChange={(e)=>patchElement(selectedElement.id,{value:e.target.value},true)}/><TextControls element={selectedElement} onChange={patch=>patchElement(selectedElement.id,patch,true)}/></>}
-          <div className="prop-grid"><label>Width<input type="number" min="24" value={Math.round(selectedElement.w)} onChange={(e)=>patchElement(selectedElement.id,{w:+e.target.value})}/></label><label>Height<input type="number" min="24" value={Math.round(selectedElement.h)} onChange={(e)=>patchElement(selectedElement.id,{h:+e.target.value})}/></label></div>
+          <AdjustField label="Width" value={Math.round(selectedElement.w)} min={24} max={Math.max(24,currentView.canvasWidth)} step={1} unit="px" onChange={v=>patchElement(selectedElement.id,{w:v},true)}/>
+          <AdjustField label="Height" value={Math.round(selectedElement.h)} min={24} max={Math.max(24,currentView.canvasHeight)} step={1} unit="px" onChange={v=>patchElement(selectedElement.id,{h:v},true)}/>
           {design.method.toLowerCase()==="embroidery"&&<EmbroideryControls element={selectedElement} onChange={patch=>patchElement(selectedElement.id,patch)}/>} 
           <button className="delete" onClick={remove}>Delete element</button>
         </> : <div className="empty-prop"><span>✓</span><strong>{warnings ? `${warnings} placement warning${warnings>1?"s":""}` : "Ready to print"}</strong><p>Select an element to edit its size, content and colour.</p></div>}
@@ -363,9 +364,106 @@ function chooseGangSheet(artW:number,artH:number,preferredW:number,preferredH:nu
 type ProductionDialogProps={production:ProductionResult|null;state:"idle"|"preparing"|"error";error:string;method:string;iccCombo:string;setIccCombo:(value:string)=>void;iccCombinations:{id:string;label:string;sourceProfile:string;destinationProfile:string}[];mirrorVinyl:boolean;setMirrorVinyl:(value:boolean)=>void;prepareProduction:(mirror?:boolean)=>Promise<void>;close:()=>void;download:()=>void;createAlternate:(format:"pdf"|"tiff"|"zip"|"gang")=>Promise<void>;createAdvanced:(kind:"underbase"|"halftone"|"halftone-fm"|"cmyk")=>Promise<void>;proofState:"none"|"pending"|"approved";formatState:string;gang:{copies:number;width:number;height:number;fillSheet:boolean;gap:number;setCopies:(value:number)=>void;setWidth:(value:number)=>void;setHeight:(value:number)=>void;setFillSheet:(value:boolean)=>void;setGap:(value:number)=>void};history:ExportRecord[];redownload:(record:ExportRecord)=>Promise<void>};
 function ProductionDialog({production,state,error,method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,prepareProduction,close,download,createAlternate,createAdvanced,proofState,formatState,gang,history,redownload}:ProductionDialogProps){
   const sheetPresets=[{id:"a4",label:"A4",w:210,h:297},{id:"letter",label:"Letter",w:216,h:279},{id:"dtf-30x40",label:"DTF 30×40",w:300,h:400},{id:"a3",label:"A3",w:297,h:420}];
-  return <div className="embroidery-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><section className="production-dialog" role="dialog" aria-modal="true" aria-label="Production export"><header><div><p className="eyebrow">PRODUCTION EXPORT</p><h2>{production?.method??method}</h2></div><button onClick={close} aria-label="Close">×</button></header>{state==="preparing"?<div className="embroidery-loading">Rendering production artwork…</div>:error&&!production?<div className="embroidery-failure"><strong>Cannot prepare this export</strong><p>{error}</p></div>:production&&<><div className="production-layout"><div className="production-preview" style={{"--preview-aspect":`${Math.max(.2,production.widthMM)/Math.max(.2,production.heightMM)}`} as React.CSSProperties}><div className="production-preview-frame"><img src={production.previewUrl} alt={`${production.method} production preview`}/></div></div><div className="production-report"><strong>{production.summary}</strong><small>{production.widthMM.toFixed(1)} × {production.heightMM.toFixed(1)} mm<br/>{production.fileName}{production.renderer?` · ${production.renderer} render`:""}</small>{proofState==="approved"?<div className="embroidery-ok">✓ Production proof approved for this preview</div>:<p className="curve-hint">Packaging will reuse this preview and approve the proof automatically when required — no extra approval step.</p>}<label className="full">Colour profile<select value={iccCombo} onChange={e=>setIccCombo(e.target.value)}>{iccCombinations.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select></label><p className="curve-hint">Common working-space profiles only (sRGB, Display P3, Gray).</p>{production.method==="Vinyl"&&<label className="mirror-option"><input type="checkbox" checked={mirrorVinyl} onChange={e=>{setMirrorVinyl(e.target.checked);void prepareProduction(e.target.checked)}}/> Mirror for heat transfer</label>}{production.method==="DTF"&&<button className="processor-button" disabled={Boolean(formatState)} onClick={()=>void createAdvanced("underbase")}>Generate white underbase</button>}{production.method==="Screen print"&&<div className="screen-processors"><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("halftone")}>AM halftone</button><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("halftone-fm")}>FM stochastic</button><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("cmyk")}>CMYK preview</button></div>}
-        {production.method!=="Vinyl"&&<div className="gang-controls"><b>Repeat on sheet</b><p>Tile this artwork across a full page so small logos do not waste film or paper.</p><div className="sheet-presets">{sheetPresets.map(preset=><button key={preset.id} type="button" className={gang.width===preset.w&&gang.height===preset.h?"active":""} onClick={()=>{gang.setWidth(preset.w);gang.setHeight(preset.h)}}>{preset.label}</button>)}</div><div><label>Width mm<input type="number" min="50" value={gang.width} onChange={e=>gang.setWidth(+e.target.value)}/></label><label>Height mm<input type="number" min="50" value={gang.height} onChange={e=>gang.setHeight(+e.target.value)}/></label><label>Gap mm<input type="number" min="0" max="50" value={gang.gap} onChange={e=>gang.setGap(+e.target.value)}/></label></div><label className="mirror-option"><input type="checkbox" checked={gang.fillSheet} onChange={e=>gang.setFillSheet(e.target.checked)}/> Fill the sheet with as many copies as fit</label>{!gang.fillSheet&&<label>Copies<input type="number" min="1" max="500" value={gang.copies} onChange={e=>gang.setCopies(+e.target.value)}/></label>}<button className="button primary" disabled={Boolean(formatState)} onClick={()=>void createAlternate("gang")}>{formatState==="gang"?"Building sheet…":gang.fillSheet?"Download filled sheet":`Download sheet × ${gang.copies}`}</button></div>}
-        <div className="format-actions"><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("pdf")}>PDF</button><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("tiff")}>TIFF</button><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("zip")}>{formatState==="zip"?"Packaging…":production.method==="DTF"?"DTF Pack ZIP":production.method==="Screen print"?"Screen Pack ZIP":"Package ZIP"}</button></div>{error&&<p className="inline-format-error">{error}</p>}{production.warnings.length?<ul>{production.warnings.map((warning,i)=><li key={i}>{warning}</li>)}</ul>:<div className="embroidery-ok">✓ Production checks passed</div>}</div></div>{history.length>0&&<div className="export-history"><div><strong>Recent immutable exports</strong><small>Stored locally with SHA-256</small></div>{history.slice(0,5).map(record=><button key={record.id} onClick={()=>void redownload(record)}><span>{record.fileName}</span><small>{new Date(record.createdAt).toLocaleString()} · {record.sha256.slice(0,12)}</small></button>)}</div>}<footer><button className="button secondary" onClick={close}>Close</button><button className="button primary" onClick={download}>Download {production.mime==="image/png"?"PNG":"SVG"}</button></footer></>}</section></div>;
+  const [sheetPreviewUrl,setSheetPreviewUrl]=useState<string|null>(null);
+  const [sheetPreviewState,setSheetPreviewState]=useState<"idle"|"loading"|"error">("idle");
+  const [sheetPreviewError,setSheetPreviewError]=useState("");
+  const sheetPreviewRef=useRef<string|null>(null);
+  const wantSheetPreview=Boolean(production&&production.method!=="Vinyl"&&(gang.fillSheet||gang.copies>1));
+  const sheetSize=production?chooseGangSheet(production.widthMM,production.heightMM,gang.width,gang.height):{width:gang.width,height:gang.height};
+
+  useEffect(()=>{
+    if(!production||production.method==="Vinyl"||!wantSheetPreview){
+      if(sheetPreviewRef.current){URL.revokeObjectURL(sheetPreviewRef.current);sheetPreviewRef.current=null}
+      setSheetPreviewUrl(null);setSheetPreviewState("idle");setSheetPreviewError("");
+      return;
+    }
+    let cancelled=false;
+    setSheetPreviewState("loading");
+    setSheetPreviewError("");
+    const timer=window.setTimeout(async()=>{
+      try{
+        const source=production.mime==="image/png"?production.blob:await rasterizeArtifact(production);
+        const blob=await api.productionGangRender(source,{
+          name:"sheet-preview",
+          sourceWidthMm:production.widthMM,
+          sourceHeightMm:production.heightMM,
+          sheetWidthMm:sheetSize.width,
+          sheetHeightMm:sheetSize.height,
+          copies:gang.fillSheet?1:gang.copies,
+          fillSheet:gang.fillSheet,
+          gapMm:gang.gap,
+          allowRotate:true,
+          dpi:72,
+        });
+        if(cancelled)return;
+        const url=URL.createObjectURL(blob);
+        if(sheetPreviewRef.current)URL.revokeObjectURL(sheetPreviewRef.current);
+        sheetPreviewRef.current=url;
+        setSheetPreviewUrl(url);
+        setSheetPreviewState("idle");
+        if(sheetSize.width!==gang.width||sheetSize.height!==gang.height){gang.setWidth(sheetSize.width);gang.setHeight(sheetSize.height)}
+      }catch(err){
+        if(cancelled)return;
+        setSheetPreviewState("error");
+        setSheetPreviewError(err instanceof Error?err.message:"Could not build sheet preview");
+      }
+    },350);
+    return()=>{cancelled=true;window.clearTimeout(timer)};
+  },[production,wantSheetPreview,gang.fillSheet,gang.copies,gang.width,gang.height,gang.gap,sheetSize.width,sheetSize.height]);
+
+  useEffect(()=>()=>{if(sheetPreviewRef.current)URL.revokeObjectURL(sheetPreviewRef.current)},[]);
+
+  const previewUrl=wantSheetPreview&&sheetPreviewUrl?sheetPreviewUrl:production?.previewUrl??"";
+  const previewAspect=wantSheetPreview?`${Math.max(.2,sheetSize.width)}/${Math.max(.2,sheetSize.height)}`:`${Math.max(.2,production?.widthMM??1)}/${Math.max(.2,production?.heightMM??1)}`;
+  const previewTitle=wantSheetPreview
+    ?(gang.fillSheet?`Filled sheet · ${sheetSize.width}×${sheetSize.height} mm`:`Sheet × ${gang.copies} · ${sheetSize.width}×${sheetSize.height} mm`)
+    :(production?.summary??"");
+
+  return <div className="embroidery-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}>
+    <section className="production-dialog" role="dialog" aria-modal="true" aria-label="Production export">
+      <header><div><p className="eyebrow">PRODUCTION EXPORT</p><h2>{production?.method??method}</h2></div><button onClick={close} aria-label="Close">×</button></header>
+      {state==="preparing"?<div className="embroidery-loading">Rendering production artwork…</div>
+      :error&&!production?<div className="embroidery-failure"><strong>Cannot prepare this export</strong><p>{error}</p></div>
+      :production&&<>
+        <div className="production-layout">
+          <div className={`production-preview ${wantSheetPreview?"sheet-mode":""}`} style={{"--preview-aspect":previewAspect} as React.CSSProperties}>
+            <div className="production-preview-frame">
+              {previewUrl?<img src={previewUrl} alt={wantSheetPreview?"Filled sheet preview with logos":`${production.method} production preview`}/>:null}
+              {wantSheetPreview&&sheetPreviewState==="loading"?<div className="preview-status">Laying out logos…</div>:null}
+              {wantSheetPreview&&sheetPreviewState==="error"?<div className="preview-status error">{sheetPreviewError||"Sheet preview failed"}</div>:null}
+            </div>
+          </div>
+          <div className="production-report">
+            <strong>{previewTitle||production.summary}</strong>
+            <small>{wantSheetPreview?`${sheetSize.width} × ${sheetSize.height} mm sheet`:`${production.widthMM.toFixed(1)} × ${production.heightMM.toFixed(1)} mm`}<br/>{production.fileName}{production.renderer?` · ${production.renderer} render`:""}</small>
+            {wantSheetPreview?<p className="curve-hint">Preview updates as you change fill, sheet size, gap, or copies.</p>:null}
+            {proofState==="approved"?<div className="embroidery-ok">✓ Production proof approved for this preview</div>:<p className="curve-hint">Packaging will reuse this artwork and approve the proof automatically when required — no extra approval step.</p>}
+            <label className="full">Colour profile<select value={iccCombo} onChange={e=>setIccCombo(e.target.value)}>{iccCombinations.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
+            <p className="curve-hint">Common working-space profiles only (sRGB, Display P3, Gray).</p>
+            {production.method==="Vinyl"&&<label className="mirror-option"><input type="checkbox" checked={mirrorVinyl} onChange={e=>{setMirrorVinyl(e.target.checked);void prepareProduction(e.target.checked)}}/> Mirror for heat transfer</label>}
+            {production.method==="DTF"&&<button className="processor-button" disabled={Boolean(formatState)} onClick={()=>void createAdvanced("underbase")}>Generate white underbase</button>}
+            {production.method==="Screen print"&&<div className="screen-processors"><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("halftone")}>AM halftone</button><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("halftone-fm")}>FM stochastic</button><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("cmyk")}>CMYK preview</button></div>}
+            {production.method!=="Vinyl"&&<div className="gang-controls">
+              <b>Repeat on sheet</b>
+              <p>Tile this artwork across a full page so small logos do not waste film or paper. The preview on the left shows the layout.</p>
+              <div className="sheet-presets">{sheetPresets.map(preset=><button key={preset.id} type="button" className={gang.width===preset.w&&gang.height===preset.h?"active":""} onClick={()=>{gang.setWidth(preset.w);gang.setHeight(preset.h)}}>{preset.label}</button>)}</div>
+              <AdjustField label="Sheet width" value={gang.width} min={50} max={600} step={1} unit=" mm" onChange={gang.setWidth}/>
+              <AdjustField label="Sheet height" value={gang.height} min={50} max={600} step={1} unit=" mm" onChange={gang.setHeight}/>
+              <AdjustField label="Gap between copies" value={gang.gap} min={0} max={50} step={1} unit=" mm" onChange={gang.setGap}/>
+              <label className="mirror-option"><input type="checkbox" checked={gang.fillSheet} onChange={e=>gang.setFillSheet(e.target.checked)}/> Fill the sheet with as many copies as fit</label>
+              {!gang.fillSheet&&<AdjustField label="Copies" value={gang.copies} min={1} max={500} step={1} onChange={gang.setCopies}/>}
+              <button className="button primary" disabled={Boolean(formatState)||sheetPreviewState==="loading"} onClick={()=>void createAlternate("gang")}>{formatState==="gang"?"Building sheet…":gang.fillSheet?"Download filled sheet":`Download sheet × ${gang.copies}`}</button>
+            </div>}
+            <div className="format-actions"><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("pdf")}>PDF</button><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("tiff")}>TIFF</button><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("zip")}>{formatState==="zip"?"Packaging…":production.method==="DTF"?"DTF Pack ZIP":production.method==="Screen print"?"Screen Pack ZIP":"Package ZIP"}</button></div>
+            {error&&<p className="inline-format-error">{error}</p>}
+            {production.warnings.length?<ul>{production.warnings.map((warning,i)=><li key={i}>{warning}</li>)}</ul>:<div className="embroidery-ok">✓ Production checks passed</div>}
+          </div>
+        </div>
+        {history.length>0&&<div className="export-history"><div><strong>Recent immutable exports</strong><small>Stored locally with SHA-256</small></div>{history.slice(0,5).map(record=><button key={record.id} onClick={()=>void redownload(record)}><span>{record.fileName}</span><small>{new Date(record.createdAt).toLocaleString()} · {record.sha256.slice(0,12)}</small></button>)}</div>}
+        <footer><button className="button secondary" onClick={close}>Close</button><button className="button primary" onClick={download}>Download {production.mime==="image/png"?"PNG":"SVG"}</button></footer>
+      </>}
+    </section>
+  </div>;
 }
 
 type MethodSettingsProps={
@@ -393,11 +491,15 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
     {(key==="dtf"||key.includes("screen")||key.includes("sublimation"))&&<label>Colour profile<select value={iccCombo} onChange={e=>setIccCombo(e.target.value)}>{iccCombinations.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select></label>}
     {key==="dtf"&&<>
       <label>Trap / underbase preset<select value={dtfTrapPreset} onChange={e=>{const id=e.target.value;setDtfTrapPreset(id);if(id==="dtf-pet-film-fine")setDtfUnderbaseSpread(1);else if(id==="dtf-dark-garment-heavy")setDtfUnderbaseSpread(3);else setDtfUnderbaseSpread(2)}}>{dtfPresets.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
-      <label>White underbase spread (px)<input type="number" min={0} max={8} value={dtfUnderbaseSpread} onChange={e=>setDtfUnderbaseSpread(+e.target.value||0)}/></label>
+      <AdjustField label="White underbase spread" value={dtfUnderbaseSpread} min={0} max={8} step={1} unit=" px" onChange={setDtfUnderbaseSpread}/>
       <p className="hint">Used for DTF pack ZIP and underbase generation on export.</p>
       <div className="sheet-row">{sheetPresets.map(preset=><button key={preset.id} type="button" className={gang.width===preset.w&&gang.height===preset.h?"active":""} onClick={()=>{gang.setWidth(preset.w);gang.setHeight(preset.h)}}>{preset.label}</button>)}</div>
-      <div className="control-grid"><label>Sheet W mm<input type="number" min={50} value={gang.width} onChange={e=>gang.setWidth(+e.target.value)}/></label><label>Sheet H mm<input type="number" min={50} value={gang.height} onChange={e=>gang.setHeight(+e.target.value)}/></label><label>Gap mm<input type="number" min={0} max={50} value={gang.gap} onChange={e=>gang.setGap(+e.target.value)}/></label><label>Copies<input type="number" min={1} max={500} value={gang.copies} onChange={e=>gang.setCopies(+e.target.value)} disabled={gang.fillSheet}/></label></div>
-      <label className="check"><input type="checkbox" checked={gang.fillSheet} onChange={e=>gang.setFillSheet(e.target.checked)}/> Fill sheet on gang export</label>
+      <AdjustField label="Sheet width" value={gang.width} min={50} max={600} step={1} unit=" mm" onChange={gang.setWidth}/>
+      <AdjustField label="Sheet height" value={gang.height} min={50} max={600} step={1} unit=" mm" onChange={gang.setHeight}/>
+      <AdjustField label="Gap between copies" value={gang.gap} min={0} max={50} step={1} unit=" mm" onChange={gang.setGap}/>
+      {!gang.fillSheet&&<AdjustField label="Copies" value={gang.copies} min={1} max={500} step={1} onChange={gang.setCopies}/>}
+      <label className="check"><input type="checkbox" checked={gang.fillSheet} onChange={e=>gang.setFillSheet(e.target.checked)}/> Fill sheet with as many logos as fit</label>
+      <p className="hint">On Export, the preview updates to show the tiled logos on the sheet.</p>
     </>}
     {key.includes("vinyl")&&<>
       <label className="check"><input type="checkbox" checked={mirrorVinyl} onChange={e=>setMirrorVinyl(e.target.checked)}/> Mirror for heat transfer (HTV)</label>
@@ -405,12 +507,15 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
     </>}
     {key.includes("screen")&&<>
       <label>Trap preset<select value={screenTrapPreset} onChange={e=>{const id=e.target.value;setScreenTrapPreset(id);if(id.includes("55"))setScreenLpi(55);else if(id.includes("45"))setScreenLpi(45)}}>{screenPresets.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
-      <div className="control-grid"><label>LPI<input type="number" min={20} max={85} value={screenLpi} onChange={e=>setScreenLpi(+e.target.value||45)}/></label><label>Screening<select value={screenMode} onChange={e=>setScreenMode(e.target.value as"am"|"fm")}><option value="am">AM (dot)</option><option value="fm">FM (stochastic)</option></select></label></div>
+      <AdjustField label="LPI" value={screenLpi} min={20} max={85} step={1} onChange={setScreenLpi} presets={[{label:"35",value:35},{label:"45",value:45},{label:"55",value:55},{label:"65",value:65}]}/>
+      <label>Screening<select value={screenMode} onChange={e=>setScreenMode(e.target.value as"am"|"fm")}><option value="am">AM (dot)</option><option value="fm">FM (stochastic)</option></select></label>
       <p className="hint">Used for screen pack ZIP and halftone processors on export.</p>
     </>}
     {key==="embroidery"&&<>
-      <label>Default stitch family<select value={embroideryDefaults.kind??"auto"} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,kind:e.target.value as Element["embroideryKind"]})}><option value="auto">Auto</option><option value="satin">Satin</option><option value="tatami">Tatami fill</option><option value="running">Running stitch</option></select></label>
-      <div className="control-grid"><label>Row spacing<input type="number" min=".25" max="2.5" step=".05" value={embroideryDefaults.spacing} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,spacing:+e.target.value})}/></label><label>Direction<input type="number" min={-180} max={180} step={5} value={embroideryDefaults.angle} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,angle:+e.target.value})}/></label></div>
+      <p className="hint" style={{marginTop:0}}>Stitch family</p>
+      <div className="segmented">{([["auto","Auto"],["satin","Satin"],["tatami","Tatami"],["running","Run"]] as const).map(([id,label])=><button key={id} type="button" className={(embroideryDefaults.kind??"auto")===id?"active":""} onClick={()=>setEmbroideryDefaults({...embroideryDefaults,kind:id})}>{label}</button>)}</div>
+      <AdjustField label="Density / row spacing" value={embroideryDefaults.spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>setEmbroideryDefaults({...embroideryDefaults,spacing:v})} meta={densityLabel(embroideryDefaults.spacing)}/>
+      <AdjustField label="Stitch direction" value={embroideryDefaults.angle} min={-180} max={180} step={5} unit="°" onChange={v=>setEmbroideryDefaults({...embroideryDefaults,angle:v})} presets={[{label:"0°",value:0},{label:"45°",value:45},{label:"90°",value:90},{label:"-45°",value:-45}]}/>
       <label>Default underlay<select value={embroideryDefaults.underlay??"auto"} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,underlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>
       <div className="tip-list">
         <p className="prop-label">THREAD TIPS</p>
@@ -426,8 +531,34 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
   </div>;
 }
 
+function densityLabel(spacing:number){
+  if(spacing<=.35)return{left:"Dense fill",right:"More stitches"};
+  if(spacing<=.55)return{left:"Balanced",right:"Typical logos"};
+  return{left:"Open fill",right:"Fewer stitches"};
+}
+
+function AdjustField({label,value,min,max,step,unit="",format,onChange,meta,presets}:{label:string;value:number;min:number;max:number;step:number;unit?:string;format?:(value:number)=>string;onChange:(value:number)=>void;meta?:{left:string;right:string};presets?:{label:string;value:number}[]}){
+  const clamp=(n:number)=>Math.min(max,Math.max(min,Number.isFinite(n)?n:min));
+  const decimals=String(step).includes(".")?String(step).split(".")[1].length:0;
+  const nudge=(dir:-1|1)=>onChange(clamp(+(value+dir*step).toFixed(decimals)));
+  const shown=(format??((n:number)=>decimals?n.toFixed(decimals):String(Math.round(n))))(value);
+  return <div className="adjust-field">
+    <div className="adjust-head"><span>{label}</span><b>{shown}{unit}</b></div>
+    {presets&&<div className="adjust-presets">{presets.map(preset=><button key={preset.label} type="button" className={value===preset.value?"active":""} onClick={()=>onChange(preset.value)}>{preset.label}</button>)}</div>}
+    <div className="adjust-row">
+      <button type="button" aria-label={`Decrease ${label}`} onClick={()=>nudge(-1)}>−</button>
+      <input type="range" min={min} max={max} step={step} value={clamp(value)} onChange={e=>onChange(clamp(+e.target.value))}/>
+      <button type="button" aria-label={`Increase ${label}`} onClick={()=>nudge(1)}>＋</button>
+    </div>
+    {meta&&<div className="adjust-meta"><span>{meta.left}</span><span>{meta.right}</span></div>}
+  </div>;
+}
+
 function EmbroideryControls({element,onChange}:{element:Element;onChange:(patch:Partial<Element>)=>void}){
   const forceThread=Boolean(element.color);
+  const spacing=element.embroiderySpacing??.45;
+  const angle=element.embroideryAngle??0;
+  const kind=element.embroideryKind??"auto";
   return <div className="embroidery-controls">
     <p className="prop-label">EMBROIDERY</p>
     {element.type==="image"&&<>
@@ -435,10 +566,12 @@ function EmbroideryControls({element,onChange}:{element:Element;onChange:(patch:
       {forceThread&&<label>Thread colour<input type="color" value={element.color||"#222222"} onChange={e=>onChange({color:e.target.value})}/></label>}
       <p className="curve-hint">{forceThread?"This image will stitch as a single thread.":"Threads are taken from the artwork colours (up to 8)."}</p>
     </>}
-    <label>Stitch family<select value={element.embroideryKind??"auto"} onChange={e=>onChange({embroideryKind:e.target.value as Element["embroideryKind"]})}><option value="auto">Auto</option><option value="satin">Satin</option><option value="tatami">Tatami fill</option><option value="running">Running stitch</option></select></label>
-    <div className="control-grid"><label>Row spacing<input type="number" min=".25" max="2.5" step=".05" value={element.embroiderySpacing??.45} onChange={e=>onChange({embroiderySpacing:+e.target.value})}/></label><label>Direction<input type="number" min="-180" max="180" step="5" value={element.embroideryAngle??0} onChange={e=>onChange({embroideryAngle:+e.target.value})}/></label></div>
+    <p className="curve-hint" style={{marginBottom:0}}>Stitch family</p>
+    <div className="segmented">{([["auto","Auto"],["satin","Satin"],["tatami","Tatami"],["running","Run"]] as const).map(([id,label])=><button key={id} type="button" className={kind===id?"active":""} onClick={()=>onChange({embroideryKind:id})}>{label}</button>)}</div>
+    <AdjustField label="Density / row spacing" value={spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>onChange({embroiderySpacing:v})} meta={densityLabel(spacing)}/>
+    <AdjustField label="Stitch direction" value={angle} min={-180} max={180} step={5} unit="°" onChange={v=>onChange({embroideryAngle:v})} presets={[{label:"0°",value:0},{label:"45°",value:45},{label:"90°",value:90},{label:"-45°",value:-45}]}/>
     <label>Underlay<select value={element.embroideryUnderlay??"auto"} onChange={e=>onChange({embroideryUnderlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>
-    <p className="curve-hint">Unsafe satin overrides are blocked by the selected machine profile.</p>
+    <p className="curve-hint">Drag the slider or tap − / ＋. Lower spacing = denser fill.</p>
   </div>;
 }
 
@@ -447,10 +580,14 @@ function TextControls({element,onChange}:{element:Element;onChange:(patch:Partia
   const circular=(element.curveType??"straight")==="circle";
   return <div className="text-controls">
     <label className="full">Text shape<select value={element.curveType??"straight"} onChange={e=>{const circle=e.target.value==="circle";onChange({curveType:circle?"circle":"straight",...(circle&&element.w<180?{w:220,h:220}: {})})}}><option value="straight">Straight</option><option value="circle">Circular</option></select></label>
-    {circular&&<div className="curve-controls"><label className="curve-slider"><span>Curve <b>{element.curveSweep??240}°</b></span><input type="range" min="30" max="360" step="5" value={element.curveSweep??240} onChange={e=>onChange({curveSweep:+e.target.value})}/></label><div className="control-grid"><label>Radius<input type="number" min="24" max="300" value={element.curveRadius??85} onChange={e=>onChange({curveRadius:+e.target.value})}/></label><label>Direction<select value={element.curveDirection??"clockwise"} onChange={e=>onChange({curveDirection:e.target.value as Element["curveDirection"]})}><option value="clockwise">Clockwise</option><option value="counterclockwise">Counter-clockwise</option></select></label><label>Placement<select value={element.curvePosition??"outside"} onChange={e=>onChange({curvePosition:e.target.value as Element["curvePosition"]})}><option value="outside">Outside</option><option value="inside">Inside</option></select></label></div><p className="curve-hint">Use the element rotation handle to change the circle orientation.</p></div>}
+    {circular&&<div className="curve-controls"><AdjustField label="Curve" value={element.curveSweep??240} min={30} max={360} step={5} unit="°" onChange={v=>onChange({curveSweep:v})}/><AdjustField label="Radius" value={element.curveRadius??85} min={24} max={300} step={1} unit=" px" onChange={v=>onChange({curveRadius:v})}/><div className="control-grid"><label>Direction<select value={element.curveDirection??"clockwise"} onChange={e=>onChange({curveDirection:e.target.value as Element["curveDirection"]})}><option value="clockwise">Clockwise</option><option value="counterclockwise">Counter-clockwise</option></select></label><label>Placement<select value={element.curvePosition??"outside"} onChange={e=>onChange({curvePosition:e.target.value as Element["curvePosition"]})}><option value="outside">Outside</option><option value="inside">Inside</option></select></label></div><p className="curve-hint">Use the element rotation handle to change the circle orientation.</p></div>}
     <label className="full">Font<select value={element.fontFamily??"Arial"} onChange={e=>onChange({fontFamily:e.target.value})}>{["Arial","Georgia","Verdana","Trebuchet MS","Courier New","Impact","Times New Roman"].map(font=><option key={font} value={font}>{font}</option>)}</select></label>
     <div className="format-row"><button className={(element.fontWeight??400)>=700?"active":""} onClick={()=>onChange({fontWeight:(element.fontWeight??400)>=700?400:700})} title="Bold"><b>B</b></button><button className={element.fontStyle==="italic"?"active":""} onClick={()=>toggle("fontStyle","italic","normal")} title="Italic"><i>I</i></button><button className={element.textDecoration==="underline"?"active":""} onClick={()=>toggle("textDecoration","underline","none")} title="Underline"><u>U</u></button>{(["left","center","right"] as const).map(align=><button key={align} className={(element.textAlign??"center")===align?"active":""} onClick={()=>onChange({textAlign:align})} title={`${align} align`}>{align==="left"?"≡":align==="center"?"≣":"☰"}</button>)}</div>
-    <div className="control-grid"><label>Size<input type="number" min="8" max="240" value={element.fontSize} onChange={e=>onChange({fontSize:+e.target.value})}/></label><label>Colour<input type="color" value={element.color} onChange={e=>onChange({color:e.target.value})}/></label><label>Spacing<input type="number" min="-5" max="30" step=".5" value={element.letterSpacing??0} onChange={e=>onChange({letterSpacing:+e.target.value})}/></label><label>Line height<input type="number" min=".7" max="3" step=".1" value={element.lineHeight??1.1} onChange={e=>onChange({lineHeight:+e.target.value})}/></label><label>Outline<input type="number" min="0" max="8" step=".5" value={element.strokeWidth??0} onChange={e=>onChange({strokeWidth:+e.target.value})}/></label><label>Outline colour<input type="color" value={element.strokeColor??"#ffffff"} onChange={e=>onChange({strokeColor:e.target.value})}/></label></div>
+    <AdjustField label="Size" value={element.fontSize} min={8} max={240} step={1} unit=" px" onChange={v=>onChange({fontSize:v})}/>
+    <div className="control-grid"><label>Colour<input type="color" value={element.color} onChange={e=>onChange({color:e.target.value})}/></label><label>Outline colour<input type="color" value={element.strokeColor??"#ffffff"} onChange={e=>onChange({strokeColor:e.target.value})}/></label></div>
+    <AdjustField label="Letter spacing" value={element.letterSpacing??0} min={-5} max={30} step={.5} unit=" px" format={v=>v.toFixed(1)} onChange={v=>onChange({letterSpacing:v})}/>
+    <AdjustField label="Line height" value={element.lineHeight??1.1} min={.7} max={3} step={.1} format={v=>v.toFixed(1)} onChange={v=>onChange({lineHeight:v})}/>
+    <AdjustField label="Outline" value={element.strokeWidth??0} min={0} max={8} step={.5} unit=" px" format={v=>v.toFixed(1)} onChange={v=>onChange({strokeWidth:v})}/>
     <label className="check"><input type="checkbox" checked={element.shadow??false} onChange={e=>onChange({shadow:e.target.checked})}/> Soft shadow</label>
   </div>
 }

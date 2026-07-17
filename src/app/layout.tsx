@@ -5,6 +5,7 @@ import "./login.css";
 import "./circular-text.css";
 import "./embroidery.css";
 import "./embroidery-controls.css";
+import "./adjust-field.css";
 import "./method-settings.css";
 import "./production-export.css";
 import "./admin.css";

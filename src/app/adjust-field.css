@@ -1,0 +1,14 @@
+.adjust-field{display:flex;flex-direction:column;gap:7px;margin:10px 0;color:var(--muted);font-size:10px}
+.adjust-field .adjust-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.adjust-field .adjust-head b{color:var(--green);font-size:11px;font-variant-numeric:tabular-nums}
+.adjust-field .adjust-row{display:grid;grid-template-columns:32px 1fr 32px;gap:6px;align-items:center}
+.adjust-field .adjust-row button{height:32px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font-size:16px;line-height:1;cursor:pointer}
+.adjust-field .adjust-row button:hover{border-color:var(--green);background:var(--mint);color:var(--green)}
+.adjust-field .adjust-row input[type=range]{width:100%;accent-color:var(--green);height:28px;margin:0;cursor:pointer}
+.adjust-field .adjust-meta{display:flex;justify-content:space-between;gap:8px;font-size:9px;color:var(--muted)}
+.adjust-presets{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 2px}
+.adjust-presets button{height:28px;padding:0 9px;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);font-size:10px;font-weight:600;cursor:pointer}
+.adjust-presets button.active{border-color:var(--green);background:var(--mint);color:var(--green)}
+.segmented{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 4px}
+.segmented button{height:34px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--muted);font-size:9px;font-weight:700;cursor:pointer}
+.segmented button.active{border-color:var(--green);background:var(--mint);color:var(--green)}
