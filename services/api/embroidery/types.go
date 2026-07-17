@@ -53,6 +53,9 @@ type Region struct {
 	SpacingMM      float64    `json:"spacingMm,omitempty"`
 	StitchLengthMM float64    `json:"stitchLengthMm,omitempty"`
 	AngleDegrees   float64    `json:"angleDegrees,omitempty"`
+	// WidthMM enables spine satin: Rings[0] is treated as a centerline and
+	// expanded to left/right rails at this total column width.
+	WidthMM        float64    `json:"widthMm,omitempty"`
 	EdgeUnderlay   bool       `json:"edgeUnderlay,omitempty"`
 	CenterUnderlay bool       `json:"centerUnderlay,omitempty"`
 	ZigzagUnderlay bool       `json:"zigzagUnderlay,omitempty"`
@@ -119,4 +122,19 @@ func (p Polygon) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateGeometry accepts either a filled polygon or an open spine centerline
+// when WidthMM is set for satin.
+func (r Region) ValidateGeometry() error {
+	if r.Kind == Satin && r.WidthMM > 0 {
+		if len(r.Geometry.Rings) != 1 || len(r.Geometry.Rings[0]) < 2 {
+			return fmt.Errorf("spine satin requires a single centerline with at least two points")
+		}
+		if r.WidthMM > 40 {
+			return fmt.Errorf("spine satin width %.2f mm is unrealistically wide", r.WidthMM)
+		}
+		return nil
+	}
+	return r.Geometry.Validate()
 }

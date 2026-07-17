@@ -8,7 +8,14 @@ import (
 // satin constructs corresponding left/right rails from even-odd scanline
 // intersections. Branching columns are rejected because they require explicit
 // rail editing; the compiler never guesses across a fork.
+//
+// When WidthMM is set, Rings[0] is a centerline spine expanded to rails — the
+// production path for script, borders and thin strokes (corrected form of the
+// libembroidery satin-outline approach).
 func satin(r Region, profile MachineProfile) ([]Stitch, []Stitch, error) {
+	if r.WidthMM > 0 {
+		return spineSatin(r, profile)
+	}
 	if len(r.Geometry.Rings) == 2 {
 		return ringSatin(r, profile)
 	}
@@ -82,6 +89,122 @@ func satin(r Region, profile MachineProfile) ([]Stitch, []Stitch, error) {
 		stitches = append(stitches, Stitch{Position: rotate(a, angle), Command: CommandStitch, Source: "satin"}, Stitch{Position: rotate(b, angle), Command: CommandStitch, Source: "satin"})
 	}
 	return underlay, stitches, nil
+}
+
+// spineSatin expands a centerline into left/right rails with local normals.
+// Unlike the libembroidery outline helper, each vertex is offset independently
+// (their published offset accidentally adds absolute positions together).
+func spineSatin(r Region, profile MachineProfile) ([]Stitch, []Stitch, error) {
+	spine := openPath(r.Geometry.Rings[0])
+	if len(spine) < 2 {
+		return nil, nil, fmt.Errorf("spine satin centerline is empty")
+	}
+	spacing := r.SpacingMM
+	if spacing <= 0 {
+		spacing = .4
+	}
+	half := r.WidthMM / 2
+	if half <= 0 {
+		return nil, nil, fmt.Errorf("spine satin width must be positive")
+	}
+	if r.WidthMM > profile.MaxStitchMM {
+		return nil, nil, fmt.Errorf("satin width %.2f mm exceeds machine maximum %.2f mm; use split satin or tatami", r.WidthMM, profile.MaxStitchMM)
+	}
+	samples := resampleOpen(spine, spacing)
+	if len(samples) < 2 {
+		return nil, nil, fmt.Errorf("spine satin is too short for the selected density")
+	}
+	left := make([]Point, len(samples))
+	right := make([]Point, len(samples))
+	for i, p := range samples {
+		n := spineNormal(samples, i)
+		left[i] = Point{X: p.X + n.X*half, Y: p.Y + n.Y*half}
+		right[i] = Point{X: p.X - n.X*half, Y: p.Y - n.Y*half}
+	}
+	var underlay []Stitch
+	if r.CenterUnderlay || (!r.CenterUnderlay && !r.ZigzagUnderlay) {
+		for _, p := range samples {
+			underlay = append(underlay, Stitch{Position: p, Command: CommandStitch, Source: "spine_satin_center_underlay"})
+		}
+	}
+	if r.ZigzagUnderlay {
+		step := maxInt(1, int(math.Round(1.5/spacing)))
+		for i := 0; i < len(samples); i += step {
+			p := left[i]
+			if (i/step)%2 == 1 {
+				p = right[i]
+			}
+			underlay = append(underlay, Stitch{Position: p, Command: CommandStitch, Source: "spine_satin_zigzag_underlay"})
+		}
+	}
+	stitches := make([]Stitch, 0, len(samples)*2)
+	for i := range samples {
+		a, b := left[i], right[i]
+		if i%2 == 1 {
+			a, b = b, a
+		}
+		stitches = append(stitches, Stitch{Position: a, Command: CommandStitch, Source: "spine_satin"}, Stitch{Position: b, Command: CommandStitch, Source: "spine_satin"})
+	}
+	return underlay, stitches, nil
+}
+
+func openPath(ring []Point) []Point {
+	if len(ring) >= 2 && ring[0] == ring[len(ring)-1] {
+		return ring[:len(ring)-1]
+	}
+	return append([]Point(nil), ring...)
+}
+
+func resampleOpen(path []Point, spacing float64) []Point {
+	if len(path) < 2 {
+		return append([]Point(nil), path...)
+	}
+	total := 0.0
+	for i := 1; i < len(path); i++ {
+		total += distance(path[i-1], path[i])
+	}
+	count := int(math.Ceil(total / spacing))
+	if count < 1 {
+		count = 1
+	}
+	out := make([]Point, 0, count+1)
+	segment, cumulative := 1, 0.0
+	for i := 0; i <= count; i++ {
+		target := float64(i) * total / float64(count)
+		for segment < len(path) && cumulative+distance(path[segment-1], path[segment]) < target {
+			cumulative += distance(path[segment-1], path[segment])
+			segment++
+		}
+		if segment >= len(path) {
+			out = append(out, path[len(path)-1])
+			continue
+		}
+		a, b := path[segment-1], path[segment]
+		length := distance(a, b)
+		t := 0.0
+		if length > 0 {
+			t = (target - cumulative) / length
+		}
+		out = append(out, Point{X: a.X + (b.X-a.X)*t, Y: a.Y + (b.Y-a.Y)*t})
+	}
+	return out
+}
+
+func spineNormal(samples []Point, i int) Point {
+	var dir Point
+	switch {
+	case i == 0:
+		dir = Point{X: samples[1].X - samples[0].X, Y: samples[1].Y - samples[0].Y}
+	case i == len(samples)-1:
+		dir = Point{X: samples[i].X - samples[i-1].X, Y: samples[i].Y - samples[i-1].Y}
+	default:
+		dir = Point{X: samples[i+1].X - samples[i-1].X, Y: samples[i+1].Y - samples[i-1].Y}
+	}
+	n := math.Hypot(dir.X, dir.Y)
+	if n < 1e-9 {
+		return Point{X: 0, Y: 1}
+	}
+	return Point{X: -dir.Y / n, Y: dir.X / n}
 }
 
 // ringSatin pairs an exterior rail with one enclosed rail. This covers closed

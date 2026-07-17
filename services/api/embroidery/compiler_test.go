@@ -200,3 +200,56 @@ func TestDSTAvoidsRedundantColorChangesAndReportsExtents(t *testing.T) {
 		t.Fatal("DST header did not record positive extents")
 	}
 }
+
+func TestSpineSatinFromCenterline(t *testing.T) {
+	spine := Polygon{Rings: [][]Point{{{0, -10}, {0, 0}, {0, 10}}}}
+	d, err := Compile([]Region{{ID: "script", ThreadID: "navy", Geometry: spine, Kind: Satin, WidthMM: 3, SpacingMM: .5, CenterUnderlay: true, ZigzagUnderlay: true}}, DefaultProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := d.Plan[0]
+	if len(block.Stitches) < 40 || len(block.Stitches)%2 != 0 {
+		t.Fatalf("expected paired spine satin rungs, got %d", len(block.Stitches))
+	}
+	if block.Stitches[0].Source != "spine_satin" {
+		t.Fatalf("wrong source %q", block.Stitches[0].Source)
+	}
+	width := distance(block.Stitches[0].Position, block.Stitches[1].Position)
+	if math.Abs(width-3) > .05 {
+		t.Fatalf("expected ~3 mm column width, got %.3f", width)
+	}
+	center, zigzag := false, false
+	for _, s := range block.Underlay {
+		center = center || s.Source == "spine_satin_center_underlay"
+		zigzag = zigzag || s.Source == "spine_satin_zigzag_underlay"
+	}
+	if !center || !zigzag {
+		t.Fatalf("missing spine underlay: center=%v zigzag=%v", center, zigzag)
+	}
+}
+
+func TestSpineSatinRejectsMachineWidth(t *testing.T) {
+	spine := Polygon{Rings: [][]Point{{{0, 0}, {0, 20}}}}
+	_, err := Compile([]Region{{ID: "wide", ThreadID: "red", Geometry: spine, Kind: Satin, WidthMM: 20, SpacingMM: .5}}, DefaultProfile())
+	if err == nil || !strings.Contains(err.Error(), "satin width") {
+		t.Fatalf("expected width error, got %v", err)
+	}
+}
+
+func TestTatamiPrefersNearestSegmentInRow(t *testing.T) {
+	// Dumbbell so mid-height scanlines contain two fill segments.
+	p := Polygon{Rings: [][]Point{{{0, 0}, {4, 0}, {4, 2}, {20, 2}, {20, 0}, {24, 0}, {24, 6}, {20, 6}, {20, 4}, {4, 4}, {4, 6}, {0, 6}}}}
+	d, err := Compile([]Region{{ID: "islands", ThreadID: "black", Geometry: p, Kind: Tatami, SpacingMM: 1, StitchLengthMM: 2}}, DefaultProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jumps := 0
+	for _, s := range d.Plan[0].Stitches {
+		if s.Command == CommandJump {
+			jumps++
+		}
+	}
+	if jumps == 0 {
+		t.Fatal("expected travel jumps between row segments")
+	}
+}

@@ -8,7 +8,7 @@ import (
 	"math"
 )
 
-const CompilerVersion = "0.1.0"
+const CompilerVersion = "0.2.0"
 
 func Compile(regions []Region, profile MachineProfile) (Document, error) {
 	if profile.ID == "" {
@@ -21,7 +21,7 @@ func Compile(regions []Region, profile MachineProfile) (Document, error) {
 		if r.ID == "" {
 			return d, fmt.Errorf("region ID is required")
 		}
-		if err := r.Geometry.Validate(); err != nil {
+		if err := r.ValidateGeometry(); err != nil {
 			return d, fmt.Errorf("region %s: %w", r.ID, err)
 		}
 		block := Block{ID: "block-" + r.ID, RegionID: r.ID, ThreadID: r.ThreadID, Kind: r.Kind, Bounds: polygonBounds(r.Geometry)}
@@ -88,20 +88,46 @@ func tatami(r Region) ([]Stitch, error) {
 	b := polygonBounds(rotated)
 	var out []Stitch
 	row := 0
+	current := Point{}
+	haveCurrent := false
 	for y := b.MinY + spacing/2; y < b.MaxY; y += spacing {
 		segments := scanlineSegments(rotated, y)
-		if row%2 == 1 {
-			for i, j := 0, len(segments)-1; i < j; i, j = i+1, j-1 {
-				segments[i], segments[j] = segments[j], segments[i]
+		// Prefer nearest remaining segment within the row (biased travel),
+		// then reverse stitch direction so exits stay near the next entry.
+		remaining := append([][2]Point(nil), segments...)
+		for len(remaining) > 0 {
+			best := 0
+			bestScore := math.Inf(1)
+			for i, s := range remaining {
+				a, z := s[0], s[1]
+				score := 0.0
+				if haveCurrent {
+					da, dz := distance(current, a), distance(current, z)
+					if dz < da {
+						score = dz
+					} else {
+						score = da
+					}
+				} else {
+					score = a.X
+					if row%2 == 1 {
+						score = -a.X
+					}
+				}
+				if score < bestScore {
+					bestScore, best = score, i
+				}
 			}
-		}
-		for _, s := range segments {
+			s := remaining[best]
+			remaining = append(remaining[:best], remaining[best+1:]...)
 			a, z := s[0], s[1]
-			if row%2 == 1 {
+			if haveCurrent && distance(current, z) < distance(current, a) {
+				a, z = z, a
+			} else if !haveCurrent && row%2 == 1 {
 				a, z = z, a
 			}
 			a, z = rotate(a, angle), rotate(z, angle)
-			if len(out) > 0 {
+			if haveCurrent {
 				out = append(out, Stitch{Position: a, Command: CommandJump, Source: "tatami_travel"})
 			} else {
 				out = append(out, Stitch{Position: a, Command: CommandStitch, Source: "tatami"})
@@ -109,6 +135,7 @@ func tatami(r Region) ([]Stitch, error) {
 			for _, p := range interpolate(a, z, length) {
 				out = append(out, Stitch{Position: p, Command: CommandStitch, Source: "tatami"})
 			}
+			current, haveCurrent = z, true
 		}
 		row++
 	}
