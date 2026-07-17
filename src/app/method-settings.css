@@ -1,0 +1,11 @@
+.method-settings{margin:16px 17px 0;padding-top:12px;border-top:1px solid var(--line)}
+.method-settings>.prop-label{margin:0 0 8px}
+.method-settings>label,.method-settings .control-grid label{display:flex;flex-direction:column;gap:5px;margin:9px 0;color:var(--muted);font-size:10px}
+.method-settings select,.method-settings input[type=number]{height:34px;border:1px solid var(--line);border-radius:7px;background:#fff;padding:0 8px;color:var(--ink)}
+.method-settings .control-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.method-settings .check{display:flex;flex-direction:row;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:var(--ink)}
+.method-settings .check input{width:auto;height:auto}
+.method-settings .hint{margin:8px 0 0;color:var(--muted);font-size:10px;line-height:1.45}
+.method-settings .sheet-row{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:8px}
+.method-settings .sheet-row button{height:30px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:9px;font-weight:700;cursor:pointer}
+.method-settings .sheet-row button.active{border-color:var(--green);background:var(--mint);color:var(--green)}

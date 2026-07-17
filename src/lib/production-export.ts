@@ -41,13 +41,15 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     const cleaned=await cleanVinylPaths(traced.regions.map(r=>r.geometry.rings),view);
     const tiny=cleaned.filter(path=>{const xs=path.map(p=>p.x),ys=path.map(p=>p.y);return Math.min(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys))<1}).length;
     if(tiny)warnings.push(`${tiny} contour(s) contain details under 1 mm that may weed poorly.`);
-    const paths=cleaned.map(path=>pathToSVG(path));
+    const holeCount=Math.max(0,cleaned.length-traced.regions.length);
+    if(holeCount>0)warnings.push(`Kept ${holeCount} interior cutout(s) for weeding.`);
+    const compound=cleaned.map(path=>pathToSVG(path)).join("");
     const transform=mirrorVinyl?`translate(${view.physicalWidthMm} 0) scale(-1 1)`:"";
     const weed=`<rect id="weed-box" x="0.5" y="0.5" width="${Math.max(0,view.physicalWidthMm-1)}" height="${Math.max(0,view.physicalHeightMm-1)}" fill="none" stroke="#000" stroke-width="0.15"/>`;
-    const svg=svgEnvelope(view,`<g fill="none" stroke="#000" stroke-width="0.15" fill-rule="evenodd" transform="${transform}">${paths.map(d=>`<path d="${d}"/>`).join("")}</g>${weed}`);
+    const svg=svgEnvelope(view,`<g transform="${transform}"><path d="${compound}" fill="#111111" fill-opacity="0.16" stroke="#000" stroke-width="0.15" fill-rule="evenodd"/></g>${weed}`);
     const blob=new Blob([svg],{type:"image/svg+xml"});
     const sha256=await hashBlob(blob);
-    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${paths.length} paths · weed box`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm,sha256,renderer:"server"};
+    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${cleaned.length} contours · weed box`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm,sha256,renderer:"server"};
   }
   const colors=[...new Set(traced.regions.map(r=>r.threadId))];
   if(colors.length>8)warnings.push(`${colors.length} colours create ${colors.length} screen separations; consider reducing the palette.`);
@@ -65,15 +67,33 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
 }
 
 async function cleanVinylPaths(ringsList:{x:number;y:number}[][][],view:DigitizerView):Promise<PolygonPaths>{
-  const absolute:PolygonPaths=ringsList.flatMap(rings=>rings.map(ring=>ring.map(p=>({x:p.x+view.physicalWidthMm/2,y:p.y+view.physicalHeightMm/2}))));
-  if(!absolute.length)throw new Error("No vinyl contours were produced.");
-  let merged:PolygonPaths=[absolute[0]];
-  for(let i=1;i<absolute.length;i++){
-    const result=await api.productionBoolean(merged,[absolute[i]],"union");
+  // Each entry is one traced shape: rings[0]=exterior, rings[1+]=holes/cutouts.
+  const polygons=ringsList
+    .map(rings=>rings.map(ring=>ring.map(p=>({x:p.x+view.physicalWidthMm/2,y:p.y+view.physicalHeightMm/2}))))
+    .filter(rings=>rings.length>0&&rings[0].length>=3);
+  if(!polygons.length)throw new Error("No vinyl contours were produced.");
+
+  // Carve holes with difference first. A flat union of every ring fills interiors
+  // and leaves only the outer silhouette — wrong for vinyl stencils.
+  const solids:PolygonPaths=[];
+  for(const rings of polygons){
+    let paths:PolygonPaths=[rings[0]];
+    for(let i=1;i<rings.length;i++){
+      if(rings[i].length<3)continue;
+      const cut=await api.productionBoolean(paths,[rings[i]],"difference");
+      paths=cut.paths;
+    }
+    solids.push(...paths);
+  }
+  if(!solids.length)throw new Error("No vinyl contours were produced.");
+
+  let merged:PolygonPaths=[solids[0]];
+  for(let i=1;i<solids.length;i++){
+    const result=await api.productionBoolean(merged,[solids[i]],"union");
     merged=result.paths;
   }
   const normalized=await api.productionOffset(merged,0,"round");
-  return normalized.paths;
+  return normalized.paths.length?normalized.paths:merged;
 }
 
 function pathToSVG(path:{x:number;y:number}[]){return path.map((p,i)=>`${i?"L":"M"}${p.x.toFixed(3)} ${p.y.toFixed(3)}`).join(" ")+" Z"}
