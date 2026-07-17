@@ -412,13 +412,35 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
       <label>Default stitch family<select value={embroideryDefaults.kind??"auto"} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,kind:e.target.value as Element["embroideryKind"]})}><option value="auto">Auto</option><option value="satin">Satin</option><option value="tatami">Tatami fill</option><option value="running">Running stitch</option></select></label>
       <div className="control-grid"><label>Row spacing<input type="number" min=".25" max="2.5" step=".05" value={embroideryDefaults.spacing} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,spacing:+e.target.value})}/></label><label>Direction<input type="number" min={-180} max={180} step={5} value={embroideryDefaults.angle} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,angle:+e.target.value})}/></label></div>
       <label>Default underlay<select value={embroideryDefaults.underlay??"auto"} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,underlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>
-      <p className="hint">Applies to newly added layers. Select a layer to override per element before compiling DST.</p>
+      <div className="tip-list">
+        <p className="prop-label">THREAD TIPS</p>
+        <ul>
+          <li>Remove solid backgrounds so white is not treated as a thread.</li>
+          <li>Flat logo colours separate cleanly; photos keep the strongest 8 colours.</li>
+          <li>Text threads come from the text colour picker.</li>
+          <li>Select an image layer to force one thread colour instead of auto-separating.</li>
+        </ul>
+      </div>
     </>}
     {key.includes("sublimation")&&<p className="hint">Full-bleed artwork is expected. Colour profile above is used when packaging.</p>}
   </div>;
 }
 
-function EmbroideryControls({element,onChange}:{element:Element;onChange:(patch:Partial<Element>)=>void}){return <div className="embroidery-controls"><p className="prop-label">EMBROIDERY</p><label>Stitch family<select value={element.embroideryKind??"auto"} onChange={e=>onChange({embroideryKind:e.target.value as Element["embroideryKind"]})}><option value="auto">Auto</option><option value="satin">Satin</option><option value="tatami">Tatami fill</option><option value="running">Running stitch</option></select></label><div className="control-grid"><label>Row spacing<input type="number" min=".25" max="2.5" step=".05" value={element.embroiderySpacing??.45} onChange={e=>onChange({embroiderySpacing:+e.target.value})}/></label><label>Direction<input type="number" min="-180" max="180" step="5" value={element.embroideryAngle??0} onChange={e=>onChange({embroideryAngle:+e.target.value})}/></label></div><label>Underlay<select value={element.embroideryUnderlay??"auto"} onChange={e=>onChange({embroideryUnderlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label><p className="curve-hint">Unsafe satin overrides are blocked by the selected machine profile.</p></div>}
+function EmbroideryControls({element,onChange}:{element:Element;onChange:(patch:Partial<Element>)=>void}){
+  const forceThread=Boolean(element.color);
+  return <div className="embroidery-controls">
+    <p className="prop-label">EMBROIDERY</p>
+    {element.type==="image"&&<>
+      <label className="check"><input type="checkbox" checked={forceThread} onChange={e=>onChange({color:e.target.checked?(element.color||"#222222"):""})}/> Force one thread colour</label>
+      {forceThread&&<label>Thread colour<input type="color" value={element.color||"#222222"} onChange={e=>onChange({color:e.target.value})}/></label>}
+      <p className="curve-hint">{forceThread?"This image will stitch as a single thread.":"Threads are taken from the artwork colours (up to 8)."}</p>
+    </>}
+    <label>Stitch family<select value={element.embroideryKind??"auto"} onChange={e=>onChange({embroideryKind:e.target.value as Element["embroideryKind"]})}><option value="auto">Auto</option><option value="satin">Satin</option><option value="tatami">Tatami fill</option><option value="running">Running stitch</option></select></label>
+    <div className="control-grid"><label>Row spacing<input type="number" min=".25" max="2.5" step=".05" value={element.embroiderySpacing??.45} onChange={e=>onChange({embroiderySpacing:+e.target.value})}/></label><label>Direction<input type="number" min="-180" max="180" step="5" value={element.embroideryAngle??0} onChange={e=>onChange({embroideryAngle:+e.target.value})}/></label></div>
+    <label>Underlay<select value={element.embroideryUnderlay??"auto"} onChange={e=>onChange({embroideryUnderlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>
+    <p className="curve-hint">Unsafe satin overrides are blocked by the selected machine profile.</p>
+  </div>;
+}
 
 function TextControls({element,onChange}:{element:Element;onChange:(patch:Partial<Element>)=>void}){
   const toggle=(key:"fontStyle"|"textDecoration",on:string,off:string)=>onChange({[key]:(element[key]??off)===on?off:on} as Partial<Element>);

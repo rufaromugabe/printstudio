@@ -9,3 +9,8 @@
 .method-settings .sheet-row{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:8px}
 .method-settings .sheet-row button{height:30px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:9px;font-weight:700;cursor:pointer}
 .method-settings .sheet-row button.active{border-color:var(--green);background:var(--mint);color:var(--green)}
+.method-settings .tip-list{margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line)}
+.method-settings .tip-list .prop-label{margin:0 0 8px}
+.method-settings .tip-list ul{margin:0;padding:0 0 0 14px;color:var(--muted);font-size:10px;line-height:1.5}
+.method-settings .tip-list li{margin:0 0 6px}
+.method-settings .tip-list li:last-child{margin-bottom:0}
