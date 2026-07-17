@@ -14,7 +14,7 @@ RUN mkdir -p /out/lib \
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libvips42 libstdc++6 potrace \
+    bash ca-certificates libvips42 libvips-tools libstdc++6 potrace \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
 COPY --from=build /out/api /usr/local/bin/api

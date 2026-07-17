@@ -41,9 +41,10 @@ jobs:
       - name: Smoke capabilities inside image
         run: |
           docker run --rm --entrypoint "" printstudio-api:ci bash -lc '
-            set -e
+            set -euo pipefail
             command -v vips
             command -v potrace
+            ls -la /usr/local/bin/lib
             test -f /usr/local/bin/lib/libclipper2c.so || test -f /usr/local/bin/lib/libclipper2c.so.SOVERSION
             vips --version
             potrace --version
