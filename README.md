@@ -18,7 +18,7 @@ cd services/api
 go run .
 ```
 
-Or run the whole local stack with `docker compose up --build`. Development mode creates a seeded user and workspace; production must set `AUTH_MODE=jwt` and provide a strong `JWT_SECRET` to verify gateway-issued HS256 access tokens. Copy `.env.example` as the configuration reference.
+Or run the whole local stack with `docker compose up --build`. Development mode (`AUTH_MODE=dev`) creates a seeded user and workspace. Production uses `AUTH_MODE=jwt` with a strong `JWT_SECRET` (32+ chars): the browser signs in with Google Identity Services, the API exchanges the Google ID token at `POST /v1/auth/google` for a short-lived PrintStudio session JWT (Bearer + httpOnly cookie), and all protected routes verify that session. Copy `.env.example` as the configuration reference.
 
 ## Repository map
 
@@ -40,7 +40,7 @@ Or run the whole local stack with `docker compose up --build`. Development mode 
 
 The editor automatically saves to the API after 1.2 seconds of inactivity and retains a browser copy when offline. Artwork is uploaded directly through a 15-minute signed PUT URL, then verified server-side for declared size, MIME signature, decodability and safe pixel dimensions before use. Durable designs reference the asset ID; one-hour signed display URLs are refreshed on reopen. PNG and JPEG originals up to 25 MB are currently accepted. SVG is deliberately rejected until a sanitization/rasterization worker is available.
 
-Authentication uses Google Identity Services when `GOOGLE_CLIENT_ID` and `NEXT_PUBLIC_GOOGLE_CLIENT_ID` are configured. The API validates Google signatures, issuer, audience, expiry and verified email before provisioning an internal user and personal workspace. Development mode remains available without Google credentials.
+Authentication uses Google Identity Services when `GOOGLE_CLIENT_ID` and `NEXT_PUBLIC_GOOGLE_CLIENT_ID` are configured with `AUTH_MODE=jwt`. The API validates the Google ID token once (signature, issuer, audience, expiry, verified email), provisions or reuses an internal user/workspace without creating duplicate workspaces on email conflict, then issues a one-hour HS256 session JWT. The studio stores the session in `sessionStorage` (not the raw Google token) and clears it on sign-out or 401. Development mode remains available without Google credentials.
 
 Future integrations intentionally absent from the active codebase are payments, AI generation, transactional email, monitoring providers, Cloudflare-specific storage configuration and external job brokers. The disabled AI control communicates that boundary in the editor.
 

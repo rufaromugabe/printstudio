@@ -374,7 +374,33 @@ func listICCProfiles(w http.ResponseWriter, _ *http.Request) {
 	write(w, http.StatusOK, map[string]any{"profiles": items})
 }
 func uploadICCProfile(w http.ResponseWriter, r *http.Request) {
-	problem(w, http.StatusForbidden, "custom ICC uploads are disabled; use the common bundled profiles (srgb, display-p3, gray-gamma-22)")
+	if iccProfiles == nil {
+		problem(w, http.StatusNotImplemented, "ICC profile store is not configured; set ICC_PROFILE_DIR")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	label := strings.TrimSpace(r.URL.Query().Get("label"))
+	description := strings.TrimSpace(r.URL.Query().Get("description"))
+	if id == "" {
+		problem(w, http.StatusUnprocessableEntity, "id query parameter is required")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		problem(w, http.StatusRequestEntityTooLarge, "ICC profile exceeds 8 MB")
+		return
+	}
+	meta, err := iccProfiles.Put(id, label, description, data)
+	if err != nil {
+		status := http.StatusUnprocessableEntity
+		if strings.Contains(err.Error(), "only common bundled") {
+			status = http.StatusForbidden
+		}
+		problem(w, status, err.Error())
+		return
+	}
+	write(w, http.StatusOK, meta)
 }
 func applyICCTransform(w http.ResponseWriter, r *http.Request) {
 	data, _, ok := decodeProductionPNG(w, r)

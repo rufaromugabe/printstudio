@@ -3,13 +3,15 @@
 
 import { ChangeEvent, PointerEvent, useEffect, useRef, useState } from "react";
 import { api, Asset, EmbroideryCompilation, EmbroideryRequest, Product } from "@/lib/api";
+import { AdminPanel } from "@/components/admin-panel";
 import { GoogleLogin } from "@/components/google-login";
+import { fetchSessionUser, getSessionUser, hasSession, isAdminRole, logoutSession, SessionUser } from "@/lib/auth";
 import { digitizeElements } from "@/lib/embroidery-digitizer";
 import { prepareProductionExport, ProductionMethod, ProductionResult } from "@/lib/production-export";
 import { artifactBlob, createPDF, createProductionPackage, createTIFF, ExportRecord, listArtifacts, rasterizeArtifact, recordArtifact } from "@/lib/production-packaging";
 
 type Side = string;
-type SidebarPanel = "design"|"templates"|"elements"|"uploads"|"imagine"|"help";
+type SidebarPanel = "design"|"templates"|"elements"|"uploads"|"imagine"|"admin"|"help";
 type Element = { id: string; type: "text" | "image"; value: string; assetId?: string; sourceWidth?:number; sourceHeight?:number; x: number; y: number; w: number; h: number; rotation: number; color: string; fontSize: number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";textDecoration?:"none"|"underline";textAlign?:"left"|"center"|"right";letterSpacing?:number;lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";curvePosition?:"outside"|"inside";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag" };
 type Design = { name: string; product: string; productId?:string;productProperties:Record<string,string|number|boolean>; color: string; method: string; side: Side; elements: Record<Side, Element[]> };
 
@@ -75,6 +77,8 @@ export default function Home() {
   const embroideryRequestRef=useRef<EmbroideryRequest|null>(null);
   const googleClientId=process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID??"";
   const [authenticated,setAuthenticated]=useState(!googleClientId);
+  const [sessionUser,setSessionUser]=useState<SessionUser|null>(null);
+  const canAdmin=isAdminRole(sessionUser?.role) || (!googleClientId && !sessionUser);
   const hydrated = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const selectedProduct=products.find(p=>p.id===design.productId)||products.find(p=>p.name===design.product);
@@ -84,8 +88,26 @@ export default function Home() {
   const selectedElement = active.find((item) => item.id === selected);
 
   useEffect(() => {
-    const timer=window.setTimeout(()=>setAuthenticated(!googleClientId||Boolean(localStorage.getItem("printstudio-google-token"))),0);return()=>window.clearTimeout(timer);
+    const timer = window.setTimeout(() => {
+      const signedIn = !googleClientId || hasSession();
+      setAuthenticated(signedIn);
+      setSessionUser(getSessionUser());
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [googleClientId]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+    fetchSessionUser()
+      .then((user) => { if (!cancelled) setSessionUser(user); })
+      .catch(() => { if (!cancelled && !googleClientId) setSessionUser({ id: "dev", workspaceId: "dev", role: "owner" }); });
+    return () => { cancelled = true; };
+  }, [authenticated, googleClientId]);
+
+  useEffect(() => {
+    if (!canAdmin && activePanel === "admin") setActivePanel("design");
+  }, [canAdmin, activePanel]);
 
   useEffect(() => {
     const raw = localStorage.getItem("printstudio-design");
@@ -209,24 +231,33 @@ export default function Home() {
   const createAdvanced=async(kind:"underbase"|"halftone"|"halftone-fm"|"cmyk")=>{if(!production)return;setFormatState(kind);setProductionError("");try{const source=await rasterizeArtifact(production),stem=production.fileName.replace(/\.[^.]+$/,"");if(kind==="underbase")await downloadBlob(await api.productionUnderbase(source,2),`${stem}-white-underbase-spread2.png`);if(kind==="halftone")await downloadBlob(await api.productionHalftone(source,300,45,22.5,1,"am"),`${stem}-45lpi-22.5deg-halftone.png`);if(kind==="halftone-fm")await downloadBlob(await api.productionHalftone(source,300,45,22.5,1,"fm"),`${stem}-fm-stochastic-halftone.png`);if(kind==="cmyk")await downloadBlob(await api.productionCMYK(source),`${stem}-cmyk-preview-uncalibrated.zip`)}catch(error){setProductionError(error instanceof Error?error.message:"Production processing failed")}finally{setFormatState("")}};
   const redownload=async(record:ExportRecord)=>{const artifact=await artifactBlob(record.id);if(!artifact)return;const url=URL.createObjectURL(artifact.blob),link=document.createElement("a");link.href=url;link.download=artifact.fileName;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000)};
 
-  if(!authenticated&&googleClientId)return <GoogleLogin clientId={googleClientId} onSuccess={token=>{localStorage.setItem("printstudio-google-token",token);setAuthenticated(true);location.reload()}}/>;
+  const signOut = async () => {
+    await logoutSession();
+    setSessionUser(null);
+    setAuthenticated(!googleClientId);
+    if (googleClientId) location.reload();
+  };
+
+  if (!authenticated && googleClientId) {
+    return <GoogleLogin clientId={googleClientId} onSuccess={() => { setAuthenticated(true); location.reload(); }} />;
+  }
 
   return <main className="app-shell">
     <header className="topbar">
       <div className="brand"><span className="brand-mark">P</span><strong>PrintStudio</strong><span className="beta">BETA</span></div>
       <input className="design-name" value={design.name} onChange={(e) => {setDesign({ ...design, name: e.target.value });setSaved(false)}} aria-label="Design name" />
-      <div className="top-actions"><span className={cloudState==="saved" ? "status saved" : "status"}>{cloudState==="saving"?"Saving…":cloudState==="saved"?"✓ Cloud saved":cloudState==="error"?"Offline copy":"Local only"}</span><button className="icon-button" onClick={undo} disabled={!history.length}>↶</button><button className="icon-button" onClick={redo} disabled={!future.length}>↷</button><button className="button secondary" onClick={share}>Share</button><button className="button secondary" onClick={save}>Save</button><button className="button primary" onClick={exportDesign}>Export <span>↗</span></button></div>
+      <div className="top-actions"><span className={cloudState==="saved" ? "status saved" : "status"}>{cloudState==="saving"?"Saving…":cloudState==="saved"?"✓ Cloud saved":cloudState==="error"?"Offline copy":"Local only"}</span><button className="icon-button" onClick={undo} disabled={!history.length}>↶</button><button className="icon-button" onClick={redo} disabled={!future.length}>↷</button><button className="button secondary" onClick={share}>Share</button><button className="button secondary" onClick={save}>Save</button>{googleClientId?<button className="button secondary" onClick={()=>void signOut()}>Sign out</button>:null}<button className="button primary" onClick={exportDesign}>Export <span>↗</span></button></div>
     </header>
     <section className="workspace">
       <aside className="rail">
-        {([{id:"design",icon:"D",label:"Design"},{id:"templates",icon:"▦",label:"Templates"},{id:"elements",icon:"◇",label:"Elements"},{id:"uploads",icon:"↑",label:"Uploads"},{id:"imagine",icon:"AI",label:"Imagine"}] as {id:SidebarPanel;icon:string;label:string}[]).map(item=><button key={item.id} className={`rail-item ${activePanel===item.id?"active":""}`} aria-pressed={activePanel===item.id} onClick={()=>{setActivePanel(item.id);setSidebarOpen(true)}}><span>{item.icon}</span>{item.label}</button>)}
+        {([{id:"design",icon:"D",label:"Design"},{id:"templates",icon:"▦",label:"Templates"},{id:"elements",icon:"◇",label:"Elements"},{id:"uploads",icon:"↑",label:"Uploads"},{id:"imagine",icon:"AI",label:"Imagine"},...(canAdmin?[{id:"admin" as const,icon:"⚙",label:"Admin"}]:[])] as {id:SidebarPanel;icon:string;label:string}[]).map(item=><button key={item.id} className={`rail-item ${activePanel===item.id?"active":""}`} aria-pressed={activePanel===item.id} onClick={()=>{setActivePanel(item.id);setSidebarOpen(true)}}><span>{item.icon}</span>{item.label}</button>)}
         <div className="rail-bottom"><button className={`rail-item ${activePanel==="help"?"active":""}`} aria-pressed={activePanel==="help"} onClick={()=>{setActivePanel("help");setSidebarOpen(true)}}><span>?</span>Help</button></div>
       </aside>
       <input ref={fileRef} type="file" hidden accept="image/png,image/jpeg" onChange={upload}/>
       <aside className={`panel ${sidebarOpen?"open":"closed"}`} aria-label={`${activePanel} tools`}>
         <button className="panel-close" onClick={()=>setSidebarOpen(false)} aria-label="Close tools panel">×</button>
         {activePanel==="design"&&<>
-          <p className="eyebrow">PRODUCT</p><div className="product-card"><div className="mini-shirt">T</div><div><select className="product-select" value={design.productId??design.product} onChange={e=>selectProduct(e.target.value)}><option value="classic-tee">Classic Tee</option>{products.filter(product=>product.id!=="classic-tee").map(product=><option value={product.id} key={product.id}>{product.name}</option>)}</select><small>{selectedProduct?.template.category??"Custom product"} · {configuredViews.length} views</small></div></div>
+          <p className="eyebrow">PRODUCT</p><div className="product-card"><div className="mini-shirt">T</div><div><select className="product-select" value={design.productId??design.product} onChange={e=>selectProduct(e.target.value)}><option value="classic-tee">Classic Tee</option>{products.filter(product=>product.active&&product.id!=="classic-tee").map(product=><option value={product.id} key={product.id}>{product.name}</option>)}</select><small>{selectedProduct?.template.category??"Custom product"} · {configuredViews.length} views</small></div></div>
           <div className="field-row"><label>Decoration method<select value={design.method} onChange={e=>commit(d=>({...d,method:e.target.value}))}>{(selectedProduct?.methods??["DTF","Embroidery","Screen print","Vinyl"]).map(method=><option key={method}>{method}</option>)}</select></label>{selectedProduct?.template.properties.map(property=><label key={property.id}>{property.label}{property.type==="select"?<select value={String((design.productProperties??{})[property.id]??property.options[0]?.value??"")} onChange={e=>commit(d=>({...d,productProperties:{...(d.productProperties??{}),[property.id]:e.target.value}}))}>{property.options.map(option=><option value={option.value} key={option.value}>{option.label}</option>)}</select>:<input value={String((design.productProperties??{})[property.id]??"")} type={property.type==="number"?"number":"text"} onChange={e=>commit(d=>({...d,productProperties:{...(d.productProperties??{}),[property.id]:e.target.value}}))}/>}</label>)}</div>
           <p className="eyebrow spaced">ADD TO YOUR DESIGN</p><button className="tool-card" onClick={addText}><span className="tool-icon">T</span><span><strong>Add text</strong><small>Headings, names and slogans</small></span><b>+</b></button>
           <button className="tool-card" onClick={()=>setActivePanel("uploads")}><span className="tool-icon">↑</span><span><strong>Upload artwork</strong><small>{uploadState||"Verified PNG or JPG · max 25 MB"}</small></span><b>+</b></button>
@@ -238,6 +269,7 @@ export default function Home() {
         {activePanel==="elements"&&<><div className="panel-title"><p className="eyebrow">ELEMENTS</p><h2>Shapes and layers</h2><p>Add vector-safe basics, then arrange everything on this view.</p></div><div className="shape-grid">{(["circle","rectangle","star","divider","badge"] as const).map(shape=><button key={shape} onClick={()=>addShape(shape)}><span className={`shape-sample ${shape}`}/>{shape}</button>)}</div><div className="panel-section-head"><strong>Current layers</strong><span>{active.length}</span></div><div className="panel-layers">{[...active].reverse().map((element,index)=><div key={element.id} className={selected===element.id?"active":""}><button className="layer-name" onClick={()=>setSelected(element.id)}><span>{element.type==="text"?"T":"▧"}</span>{element.type==="text"?element.value:"Artwork"}</button><div><button title="Move forward" disabled={index===0} onClick={()=>moveLayer(element.id,1)}>↑</button><button title="Move backward" disabled={index===active.length-1} onClick={()=>moveLayer(element.id,-1)}>↓</button><button title="Duplicate" onClick={()=>duplicateElement(element)}>⧉</button></div></div>)}</div></>}
         {activePanel==="uploads"&&<><div className="panel-title"><p className="eyebrow">UPLOADS</p><h2>Your artwork</h2><p>Validated assets stay available so you can reuse them across views.</p></div><button className="upload-dropzone" onClick={()=>fileRef.current?.click()} onDragOver={event=>{event.preventDefault();event.currentTarget.classList.add("dragging")}} onDragLeave={event=>event.currentTarget.classList.remove("dragging")} onDrop={event=>{event.preventDefault();event.currentTarget.classList.remove("dragging");const file=event.dataTransfer.files[0];if(file)void uploadFile(file)}}><span>↑</span><strong>Upload PNG or JPG</strong><small>Click or drop artwork here · maximum 25 MB</small></button>{uploadState&&<p className="upload-status" role="status">{uploadState}</p>}<div className="panel-section-head"><strong>Asset library</strong><span>{assets.length}</span></div>{assetState==="loading"?<div className="panel-empty">Loading your uploads…</div>:assetState==="offline"?<div className="panel-empty"><strong>Asset service unavailable</strong><span>You can retry when the API and object storage are running.</span></div>:assets.length===0?<div className="panel-empty"><strong>No uploads yet</strong><span>Your first validated image will appear here.</span></div>:<div className="asset-grid">{assets.map(asset=><button key={asset.id} onClick={()=>void insertAsset(asset).catch(error=>setUploadState(error instanceof Error?error.message:"Asset unavailable"))} title={`Add ${asset.fileName}`}>{asset.url?<img src={asset.url} alt=""/>:<span>↻</span>}<strong>{asset.fileName}</strong><small>{asset.width} × {asset.height}</small></button>)}</div>}</>}
         {activePanel==="imagine"&&<><div className="panel-title"><p className="eyebrow">IMAGINE</p><h2>Shape the idea first</h2><p>AI generation is intentionally not connected yet. You can still capture a direction and place it as editable text.</p></div><label className="idea-field">Design idea<textarea value={ideaText} onChange={event=>setIdeaText(event.target.value)} placeholder="Example: Harare cycling club, bold retro lettering, sunrise colours"/></label><button className="button primary panel-action" disabled={!ideaText.trim()} onClick={addIdeaAsText}>Add idea as text</button><p className="eyebrow spaced">IDEA STARTERS</p><div className="idea-chips">{["Local pride","Team spirit","Minimal brand","Birthday crew","Faith and purpose","Retro sports"].map(idea=><button key={idea} onClick={()=>setIdeaText(idea)}>{idea}</button>)}</div><div className="tip"><span>i</span><p>Image generation will only be enabled when an AI provider, credit controls and content-safety flow are configured.</p></div></>}
+        {activePanel==="admin"&&canAdmin&&<AdminPanel products={products} onProductsChange={setProducts}/>}
         {activePanel==="help"&&<><div className="panel-title"><p className="eyebrow">HELP</p><h2>Studio guide</h2><p>Build on one product view at a time, then review production warnings before export.</p></div><div className="help-list"><article><span>1</span><div><strong>Choose the product</strong><p>Product configuration controls available views, physical size and decoration methods.</p></div></article><article><span>2</span><div><strong>Add and edit artwork</strong><p>Upload reusable images, add text or start from an editable layout.</p></div></article><article><span>3</span><div><strong>Stay inside the safe area</strong><p>The dotted boundary protects important detail from production edges.</p></div></article><article><span>4</span><div><strong>Export for the method</strong><p>DTF, screen, vinyl, sublimation and embroidery apply different checks.</p></div></article></div><div className="shortcut-card"><strong>Quick controls</strong><span>Drag · move element</span><span>Corner handles · resize</span><span>Top handle · rotate</span><span>Toolbar arrows · undo and redo</span></div></>}
       </aside>
       <section className="stage-wrap">

@@ -90,9 +90,15 @@ func main() {
 		log.Printf("seeded common ICC profiles into %s", dir)
 	}
 	enforceProductionNativesOrExit()
+	if err := mustConfigureAuth(); err != nil {
+		log.Fatalf("auth configuration: %v", err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) { write(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /health/ready", api.ready)
+	mux.HandleFunc("POST /v1/auth/google", api.loginGoogle)
+	mux.Handle("GET /v1/auth/me", api.auth(http.HandlerFunc(api.authMe)))
+	mux.HandleFunc("POST /v1/auth/logout", api.logout)
 	mux.Handle("GET /v1/products", api.auth(http.HandlerFunc(api.listProducts)))
 	mux.Handle("POST /v1/products", api.auth(api.requireRole("admin", http.HandlerFunc(api.upsertProduct))))
 	mux.Handle("GET /v1/designs", api.auth(http.HandlerFunc(api.listDesigns)))
@@ -323,25 +329,31 @@ func (a *API) assetURL(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if env("AUTH_MODE", "dev") == "dev" {
+		switch authMode() {
+		case "dev":
 			id := Identity{env("DEV_USER_ID", "00000000-0000-0000-0000-000000000001"), env("DEV_WORKSPACE_ID", "10000000-0000-0000-0000-000000000001"), r.Header.Get("X-Dev-Role")}
 			if id.Role == "" {
 				id.Role = "owner"
 			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey, id)))
 			return
-		}
-		if env("AUTH_MODE", "dev") == "google" {
-			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			id, err := a.googleIdentity(r.Context(), token)
+		case "jwt":
+			cookie, _ := r.Cookie(sessionCookieName)
+			cookieVal := ""
+			if cookie != nil {
+				cookieVal = cookie.Value
+			}
+			token := extractSessionToken(r.Header.Get("Authorization"), cookieVal)
+			id, err := parseSessionJWT(token)
 			if err != nil {
-				problem(w, 401, "invalid or missing Google sign-in")
+				problem(w, http.StatusUnauthorized, "invalid or expired session")
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey, id)))
 			return
+		default:
+			problem(w, http.StatusInternalServerError, "unsupported AUTH_MODE; use dev or jwt")
 		}
-		problem(w, 500, "unsupported AUTH_MODE; use dev or google")
 	})
 }
 func (a *API) requireRole(role string, next http.Handler) http.Handler {
@@ -356,7 +368,12 @@ func (a *API) requireRole(role string, next http.Handler) http.Handler {
 }
 
 func (a *API) listProducts(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.db.QueryContext(r.Context(), `SELECT id,name,methods,views,active,template FROM products WHERE active=true ORDER BY name`)
+	id := identity(r)
+	query := `SELECT id,name,methods,views,active,template FROM products WHERE active=true ORDER BY name`
+	if id.Role == "owner" || id.Role == "admin" {
+		query = `SELECT id,name,methods,views,active,template FROM products ORDER BY name`
+	}
+	rows, err := a.db.QueryContext(r.Context(), query)
 	if err != nil {
 		problem(w, 500, "query failed")
 		return
@@ -642,7 +659,9 @@ func problem(w http.ResponseWriter, status int, message string) {
 }
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", env("WEB_ORIGIN", "http://localhost:3000"))
+		origin := env("WEB_ORIGIN", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Dev-Role")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")

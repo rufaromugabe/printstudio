@@ -1,9 +1,28 @@
+import { authHeaders, handleUnauthorized } from "@/lib/auth";
+
 export type CloudDesign<T> = { id: string; name: string; document: T; version: number; updatedAt: string };
 export type ProductOption={value:string;label:string};
 export type ProductView={id:string;label:string;canvasWidth:number;canvasHeight:number;physicalWidthMm:number;physicalHeightMm:number;safeMarginMm:number;bleedMm:number;mockup:{kind?:string;baseAssetId?:string|null;maskAssetId?:string|null;shadowAssetId?:string|null;highlightAssetId?:string|null}};
 export type ProductTemplate={version:number;category:string;views:ProductView[];properties:{id:string;label:string;type:"select"|"text"|"number"|"boolean";required:boolean;options:ProductOption[]}[];colors:ProductOption[]};
 export type Product = { id: string; name: string; methods: string[]; views: string[]; active: boolean;template:ProductTemplate };
 export type Asset = { id:string; fileName:string; contentType:string; size:number; width:number; height:number; status:string; url:string };
+export type AuditEvent = { action: string; resourceId: string; actorId: string; createdAt: string };
+export type ICCProfile = { id: string; label: string; fileName: string; sha256: string; size: number; version: number; createdAt: string; description?: string };
+export type ProductionMetrics = {
+  counters: Record<string, number>;
+  capabilities: {
+    icc?: boolean;
+    vectorTrace?: boolean;
+    polygonBoolean?: boolean;
+    maxRenderPixels?: number;
+    vipsPath?: string;
+    potracePath?: string;
+    iccProfiles?: boolean;
+    productionReady?: boolean;
+  };
+  requireNatives: boolean;
+  requireIcc: boolean;
+};
 export type EmbroideryPoint={x:number;y:number};
 export type EmbroideryRegion={id:string;threadId:string;geometry:{rings:EmbroideryPoint[][]};kind:"running"|"tatami"|"satin";spacingMm?:number;stitchLengthMm?:number;angleDegrees?:number;widthMm?:number;edgeUnderlay?:boolean;centerUnderlay?:boolean;zigzagUnderlay?:boolean};
 export type EmbroideryRequest={name:string;regions:EmbroideryRegion[];machine:{id:string;name:string;hoopWidthMm:number;hoopHeightMm:number;maxStitches:number;maxColors:number;minStitchMm:number;maxStitchMm:number;maxJumpMm:number}};
@@ -14,14 +33,67 @@ export type PolygonPaths=PolygonPoint[][];
 const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token=typeof window!=="undefined"?localStorage.getItem("printstudio-google-token"):null;
-  const response = await fetch(`${base}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(token?{Authorization:`Bearer ${token}`}:{}) ,...init?.headers } });
-  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.message ?? `Request failed (${response.status})`); }
+  const response = await fetch(`${base}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...authHeaders(init?.headers) },
+  });
+  if (response.status === 401) {
+    handleUnauthorized();
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.message ?? "Session expired — sign in again");
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.message ?? `Request failed (${response.status})`);
+  }
   return response.json();
 }
-async function requestBlob(path:string,body:Blob):Promise<Blob>{const token=typeof window!=="undefined"?localStorage.getItem("printstudio-google-token"):null;const response=await fetch(`${base}${path}`,{method:"POST",headers:{"Content-Type":body.type||"image/png",...(token?{Authorization:`Bearer ${token}`}:{})},body});if(!response.ok){const problem=await response.json().catch(()=>({}));throw new Error(problem.message??`Production request failed (${response.status})`)}return response.blob()}
+async function requestBlob(path: string, body: Blob): Promise<Blob> {
+  const response = await fetch(`${base}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { ...authHeaders({ "Content-Type": body.type || "image/png" }) },
+    body,
+  });
+  if (response.status === 401) {
+    handleUnauthorized();
+    const problem = await response.json().catch(() => ({}));
+    throw new Error(problem.message ?? "Session expired — sign in again");
+  }
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({}));
+    throw new Error(problem.message ?? `Production request failed (${response.status})`);
+  }
+  return response.blob();
+}
 export const api = {
   products: () => request<Product[]>("/v1/products"),
+  upsertProduct: (product: Product) => request<Product>("/v1/products", { method: "POST", body: JSON.stringify(product) }),
+  audit: () => request<AuditEvent[]>("/v1/audit"),
+  productionMetrics: () => request<ProductionMetrics>("/v1/production/metrics"),
+  iccProfiles: () => request<{ profiles: ICCProfile[] }>("/v1/production/icc/profiles"),
+  uploadIccProfile: async (file: Blob, options: { id: string; label?: string; description?: string }) => {
+    const query = new URLSearchParams({ id: options.id });
+    if (options.label) query.set("label", options.label);
+    if (options.description) query.set("description", options.description);
+    const response = await fetch(`${base}/v1/production/icc/profiles?${query}`, {
+      method: "POST",
+      credentials: "include",
+      headers: { ...authHeaders({ "Content-Type": file.type || "application/octet-stream" }) },
+      body: file,
+    });
+    if (response.status === 401) {
+      handleUnauthorized();
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message ?? "Session expired — sign in again");
+    }
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message ?? `ICC upload failed (${response.status})`);
+    }
+    return response.json() as Promise<ICCProfile>;
+  },
   assets: () => request<Asset[]>("/v1/assets"),
   designs: <T>() => request<CloudDesign<T>[]>("/v1/designs"),
   design: <T>(id: string) => request<CloudDesign<T>>(`/v1/designs/${id}`),
@@ -38,8 +110,8 @@ export const api = {
   assetURL: (id:string) => request<{url:string;expiresIn:number}>(`/v1/assets/${id}/url`),
   compileEmbroidery:(input:EmbroideryRequest)=>request<EmbroideryCompilation>("/v1/embroidery/compile",{method:"POST",body:JSON.stringify(input)}),
   exportEmbroidery:async(input:EmbroideryRequest)=>{
-    const token=typeof window!=="undefined"?localStorage.getItem("printstudio-google-token"):null;
-    const response=await fetch(`${base}/v1/embroidery/export/dst`,{method:"POST",headers:{"Content-Type":"application/json",...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(input)});
+    const response=await fetch(`${base}/v1/embroidery/export/dst`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify(input)});
+    if(response.status===401){handleUnauthorized();const body=await response.json().catch(()=>({}));throw new Error(body.message??"Session expired — sign in again")}
     if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.message??`Export failed (${response.status})`)}
     return response.blob();
   },
@@ -49,8 +121,8 @@ export const api = {
   productionCapabilities:()=>request<{icc:boolean;vectorTrace:boolean;polygonBoolean:boolean;maxRenderPixels:number;vipsPath:string;potracePath:string;screeningModes:string[];trapPresets:{id:string;label:string;method:string;spreadPixels:number;underbaseChokePixels:number;threshold:number;notes:string;dpi:number}[];namedInks:{id:string;name:string;hex:string;family:string}[];iccProfiles:boolean;qualityPolicy:string;productionReady:boolean;requireIcc:boolean;requireApproval:boolean;acceptanceGates:{method:string;checks:{id:string;label:string;required:boolean}[]}[];commonIccProfiles:{id:string;label:string;description:string;roles:string[]}[];iccCombinations:{id:string;label:string;sourceProfile:string;destinationProfile:string}[]}>("/v1/production/capabilities"),
   productionGates:()=>request<{gates:{method:string;checks:{id:string;label:string;required:boolean}[]}[]}>("/v1/production/gates"),
   productionRenderScene:async(input:{name:string;method:string;dpi?:number;view:{canvasWidth:number;canvasHeight:number;physicalWidthMm:number;physicalHeightMm:number;bleedMm?:number};elements:Record<string,unknown>[]})=>{
-    const token=typeof window!=="undefined"?localStorage.getItem("printstudio-google-token"):null;
-    const response=await fetch(`${base}/v1/production/render/scene`,{method:"POST",headers:{"Content-Type":"application/json",...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(input)});
+    const response=await fetch(`${base}/v1/production/render/scene`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify(input)});
+    if(response.status===401){handleUnauthorized();const body=await response.json().catch(()=>({}));throw new Error(body.message??"Session expired — sign in again")}
     if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.message??`Scene render failed (${response.status})`)}
     const blob=await response.blob();
     return{blob,sha256:response.headers.get("X-PrintStudio-SHA256")??"",widthPx:Number(response.headers.get("X-PrintStudio-Width-Px")??0),heightPx:Number(response.headers.get("X-PrintStudio-Height-Px")??0)};

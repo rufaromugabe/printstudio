@@ -6,6 +6,7 @@ services:
     environment:
       AUTH_MODE: jwt
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID}
       WEB_ORIGIN: ${WEB_ORIGIN:-https://studio.example.com}
       VIPS_BIN: ${VIPS_BIN:-vips}
       POTRACE_BIN: ${POTRACE_BIN:-potrace}

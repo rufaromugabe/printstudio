@@ -18,6 +18,8 @@ services:
       # Compose network hostname (overrides localhost from .env)
       DATABASE_URL: postgres://printstudio:printstudio@postgres:5432/printstudio?sslmode=disable
       AUTH_MODE: ${AUTH_MODE:-dev}
+      JWT_SECRET: ${JWT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
       S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT in .env}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT in .env}
