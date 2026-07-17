@@ -1,0 +1,14 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY,email text UNIQUE NOT NULL,display_name text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS workspaces(id uuid PRIMARY KEY,name text NOT NULL,plan text NOT NULL DEFAULT 'free',created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS memberships(workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,user_id uuid REFERENCES users(id) ON DELETE CASCADE,role text NOT NULL CHECK(role IN('owner','admin','member','viewer')),PRIMARY KEY(workspace_id,user_id));
+CREATE TABLE IF NOT EXISTS products(id text PRIMARY KEY,name text NOT NULL,methods text[] NOT NULL DEFAULT '{}',views text[] NOT NULL DEFAULT '{}',active boolean NOT NULL DEFAULT true,updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS designs(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),workspace_id uuid NOT NULL REFERENCES workspaces(id),owner_id uuid NOT NULL REFERENCES users(id),name text NOT NULL,document jsonb NOT NULL,current_version int NOT NULL DEFAULT 1,updated_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz);
+CREATE INDEX IF NOT EXISTS designs_workspace_updated_idx ON designs(workspace_id,updated_at DESC) WHERE deleted_at IS NULL;
+CREATE TABLE IF NOT EXISTS design_versions(design_id uuid REFERENCES designs(id) ON DELETE CASCADE,version int NOT NULL,document jsonb NOT NULL,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(design_id,version));
+CREATE TABLE IF NOT EXISTS share_links(token text PRIMARY KEY,design_id uuid NOT NULL REFERENCES designs(id) ON DELETE CASCADE,workspace_id uuid NOT NULL REFERENCES workspaces(id),created_by uuid NOT NULL REFERENCES users(id),expires_at timestamptz NOT NULL,revoked_at timestamptz,created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS audit_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,workspace_id uuid NOT NULL REFERENCES workspaces(id),actor_id uuid NOT NULL REFERENCES users(id),action text NOT NULL,resource_id text NOT NULL,ip text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT now());
+INSERT INTO users(id,email,display_name) VALUES('00000000-0000-0000-0000-000000000001','developer@printstudio.local','Local Developer') ON CONFLICT DO NOTHING;
+INSERT INTO workspaces(id,name) VALUES('10000000-0000-0000-0000-000000000001','Development Workspace') ON CONFLICT DO NOTHING;
+INSERT INTO memberships VALUES('10000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001','owner') ON CONFLICT DO NOTHING;
+INSERT INTO products(id,name,methods,views) VALUES('classic-tee','Classic Tee',ARRAY['DTF','Screen print','Vinyl'],ARRAY['front','back']),('pullover-hoodie','Pullover Hoodie',ARRAY['DTF','Embroidery','Screen print'],ARRAY['front','back']) ON CONFLICT DO NOTHING;

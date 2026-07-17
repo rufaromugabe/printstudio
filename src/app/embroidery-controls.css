@@ -1,0 +1,5 @@
+.embroidery-controls{margin:18px 17px 0;padding-top:12px;border-top:1px solid var(--line)}
+.embroidery-controls>label{display:flex;flex-direction:column;gap:5px;margin:9px 0;color:var(--muted);font-size:10px}
+.embroidery-controls select,.embroidery-controls input{height:34px;border:1px solid var(--line);border-radius:7px;background:#fff;padding:0 8px}
+.embroidery-controls .control-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.embroidery-controls .control-grid label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:10px}
