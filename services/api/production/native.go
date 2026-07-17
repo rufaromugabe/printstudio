@@ -25,6 +25,8 @@ type Capabilities struct {
 	RequireICC      bool         `json:"requireIcc"`
 	RequireApproval bool         `json:"requireApproval"`
 	AcceptanceGates []MethodGate `json:"acceptanceGates"`
+	CommonICC       []CommonICCProfile `json:"commonIccProfiles"`
+	ICCCombinations []map[string]string `json:"iccCombinations"`
 }
 
 func (n NativeTools) Probe() Capabilities {
@@ -38,9 +40,11 @@ func (n NativeTools) Probe() Capabilities {
 		ScreeningModes: []string{string(ScreeningAM), string(ScreeningFM)},
 		TrapPresets:    TrapPresets(),
 		NamedInks:      DefaultNamedInks(),
-		QualityPolicy:  "fail-closed: no boundary fallbacks, no browser gang sheets, AM angle conflicts rejected, ICC required when policy enabled",
+		QualityPolicy:  "fail-closed: common ICC profiles only (sRGB, Display P3, Gray); no custom profile uploads",
 		ProductionReady: icc && trace && polygon,
 		AcceptanceGates: MethodAcceptanceGates(),
+		CommonICC:       CommonICCProfiles(),
+		ICCCombinations: CommonICCCombinations(),
 	}
 }
 func (n NativeTools) ICCTransform(ctx context.Context, input, output, sourceProfile, destinationProfile, stringIntent string) error {

@@ -1,0 +1,23 @@
+# Production overlay: natives, JWT auth, ICC + approval gates.
+services:
+  api:
+    environment:
+      AUTH_MODE: jwt
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      WEB_ORIGIN: ${WEB_ORIGIN:-https://studio.example.com}
+      VIPS_BIN: vips
+      POTRACE_BIN: potrace
+      ICC_PROFILE_DIR: /var/printstudio/icc
+      REQUIRE_PRODUCTION_NATIVES: "true"
+      REQUIRE_PRODUCTION_APPROVAL: "true"
+      REQUIRE_ICC: "true"
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+    volumes:
+      - icc_profiles:/var/printstudio/icc
+  web:
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.example.com}
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
+
+volumes:
+  icc_profiles:

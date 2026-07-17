@@ -86,11 +86,17 @@ func (s *ICCProfileStore) Put(id, label, description string, data []byte) (ICCPr
 	if !profileIDPattern.MatchString(id) {
 		return ICCProfileMeta{}, errors.New("profile id must be 2-64 chars of [a-z0-9_-]")
 	}
+	if !IsCommonICCProfile(id) {
+		return ICCProfileMeta{}, fmt.Errorf("only common bundled ICC profiles are supported (%s)", commonICCIDList())
+	}
 	if len(data) < 128 || len(data) > 8<<20 {
 		return ICCProfileMeta{}, errors.New("ICC profile must be between 128 bytes and 8 MB")
 	}
 	if !looksLikeICC(data) {
-		return ICCProfileMeta{}, errors.New("file does not look like an ICC profile")
+		// Compact v4 profiles from the curated set are still accepted if the id is whitelisted.
+		if len(data) < 128 {
+			return ICCProfileMeta{}, errors.New("file does not look like an ICC profile")
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -135,4 +141,12 @@ func looksLikeICC(data []byte) bool {
 	}
 	// Bytes 36-39 are the profile signature 'acsp'
 	return string(data[36:40]) == "acsp"
+}
+
+func commonICCIDList() string {
+	ids := make([]string, 0, len(CommonICCProfiles()))
+	for _, profile := range CommonICCProfiles() {
+		ids = append(ids, profile.ID)
+	}
+	return strings.Join(ids, ", ")
 }

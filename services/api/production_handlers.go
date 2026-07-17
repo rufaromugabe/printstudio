@@ -374,22 +374,7 @@ func listICCProfiles(w http.ResponseWriter, _ *http.Request) {
 	write(w, http.StatusOK, map[string]any{"profiles": items})
 }
 func uploadICCProfile(w http.ResponseWriter, r *http.Request) {
-	if iccProfiles == nil {
-		problem(w, http.StatusNotImplemented, "ICC profile store is not configured; set ICC_PROFILE_DIR")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		problem(w, http.StatusRequestEntityTooLarge, "ICC profile exceeds 8 MB")
-		return
-	}
-	meta, err := iccProfiles.Put(r.URL.Query().Get("id"), r.URL.Query().Get("label"), r.URL.Query().Get("description"), data)
-	if err != nil {
-		problem(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	write(w, http.StatusCreated, meta)
+	problem(w, http.StatusForbidden, "custom ICC uploads are disabled; use the common bundled profiles (srgb, display-p3, gray-gamma-22)")
 }
 func applyICCTransform(w http.ResponseWriter, r *http.Request) {
 	data, _, ok := decodeProductionPNG(w, r)
@@ -626,6 +611,12 @@ func applyProductionICC(ctx context.Context, pngData []byte, sourceID, destinati
 	destinationID = strings.TrimSpace(destinationID)
 	if sourceID == "" || destinationID == "" {
 		return nil, nil, fmt.Errorf("sourceProfile and destinationProfile query parameters are required for ICC conversion")
+	}
+	if _, err := prod.LookupCommonICC(sourceID); err != nil {
+		return nil, nil, err
+	}
+	if _, err := prod.LookupCommonICC(destinationID); err != nil {
+		return nil, nil, err
 	}
 	sourceMeta, sourcePath, err := iccProfiles.Get(sourceID)
 	if err != nil {

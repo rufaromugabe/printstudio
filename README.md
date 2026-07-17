@@ -58,6 +58,24 @@ The Go API now supplies the difficult deterministic prepress operations: exact E
 
 ```bash
 npm run build
-cd services/api && go test ./...
+cd services/api && CGO_ENABLED=0 go test ./...
 ```
-# printstudio
+
+## Production-ready deploy
+
+The API production image (`services/api/Dockerfile`) builds with Clipper2 (`-tags clipper2`), installs libvips + Potrace, and enables:
+
+- `REQUIRE_PRODUCTION_NATIVES=true`
+- `REQUIRE_PRODUCTION_APPROVAL=true`
+- `REQUIRE_ICC=true`
+- `ICC_PROFILE_DIR=/var/printstudio/icc`
+
+Use the prod compose overlay:
+
+```bash
+docker compose -f compose.yaml -f compose.prod.yaml up --build
+```
+
+Upload printer ICC profiles via `POST /v1/production/icc/profiles`, then check `GET /health/ready` for `productionReady: true`.
+
+DTF/sublimation colour tiles render on the server (`POST /v1/production/render/scene`). Packaging requires an approved production proof when approval policy is on. Vinyl requires Clipper2. Admin metrics: `GET /v1/production/metrics`.

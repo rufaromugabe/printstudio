@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - name: Portable tests
+        run: CGO_ENABLED=0 go test ./...
+      - name: Portable build
+        run: CGO_ENABLED=0 go build -o /tmp/printstudio-api .
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  production-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production API image
+        run: docker build -t printstudio-api:ci ./services/api
+      - name: Smoke capabilities inside image
+        run: |
+          docker run --rm --entrypoint "" printstudio-api:ci bash -lc '
+            set -e
+            command -v vips
+            command -v potrace
+            test -f /usr/local/bin/lib/libclipper2c.so || test -f /usr/local/bin/lib/libclipper2c.so.SOVERSION
+            vips --version
+            potrace --version
+          '

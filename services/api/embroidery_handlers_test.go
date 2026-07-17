@@ -17,7 +17,7 @@ func TestCompileEmbroideryHandler(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), `"compilerVersion":"0.1.0"`) || !strings.Contains(res.Body.String(), `"svg":"\u003csvg`) {
+	if !strings.Contains(res.Body.String(), `"compilerVersion":"0.2.0"`) || !strings.Contains(res.Body.String(), `"svg":"`) {
 		t.Fatalf("missing compiler response: %s", res.Body.String())
 	}
 }

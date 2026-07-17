@@ -269,20 +269,28 @@ func TestICCProfileStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Minimal acsp signature at offset 36.
-	data := make([]byte, 128)
-	copy(data[36:40], []byte("acsp"))
-	meta, err := store.Put("srgb-test", "sRGB test", "unit", data)
-	if err != nil || meta.Version != 1 {
-		t.Fatalf("put failed: %#v %v", meta, err)
+	if err := SeedCommonICCProfiles(store); err != nil {
+		t.Fatal(err)
 	}
-	got, path, err := store.Get("srgb-test")
-	if err != nil || got.SHA256 != meta.SHA256 || path == "" {
+	got, path, err := store.Get("srgb")
+	if err != nil || got.ID != "srgb" || path == "" {
 		t.Fatalf("get failed: %#v %v", got, err)
 	}
 	list, err := store.List()
-	if err != nil || len(list) != 1 {
+	if err != nil || len(list) != 3 {
 		t.Fatalf("list failed: %v %#v", err, list)
+	}
+	if _, err := store.Put("custom-printer", "nope", "", make([]byte, 128)); err == nil {
+		t.Fatal("custom ICC upload must be rejected")
+	}
+}
+
+func TestCommonICCCatalog(t *testing.T) {
+	if len(CommonICCProfiles()) != 3 || len(CommonICCCombinations()) != 3 {
+		t.Fatal("expected 3 common profiles and 3 combinations")
+	}
+	if !IsCommonICCProfile("srgb") || IsCommonICCProfile("fogra39") {
+		t.Fatal("common ICC whitelist mismatch")
 	}
 }
 

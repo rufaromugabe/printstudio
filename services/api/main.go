@@ -83,7 +83,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("ICC profile store: %v", err)
 		}
+		if err := prod.SeedCommonICCProfiles(store); err != nil {
+			log.Fatalf("ICC common profile seed: %v", err)
+		}
 		iccProfiles = store
+		log.Printf("seeded common ICC profiles into %s", dir)
 	}
 	enforceProductionNativesOrExit()
 	mux := http.NewServeMux()
