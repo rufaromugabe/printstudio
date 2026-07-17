@@ -12,15 +12,18 @@ func Validate(d Document) []Diagnostic {
 	}
 	for _, b := range d.Plan {
 		colors[b.ThreadID] = true
-		stitches := append(append([]Stitch{}, b.Underlay...), b.Stitches...)
-		count += len(stitches)
-		for i := 1; i < len(stitches); i++ {
-			n := distance(stitches[i-1].Position, stitches[i].Position)
-			if stitches[i].Command == CommandStitch && n > d.Machine.MaxStitchMM {
-				add(Error, "STITCH_TOO_LONG", fmt.Sprintf("stitch is %.2f mm; maximum is %.2f mm", n, d.Machine.MaxStitchMM), b.RegionID)
-			}
-			if stitches[i].Command == CommandStitch && n > 0 && n < d.Machine.MinStitchMM {
-				shortByRegion[b.RegionID]++
+		// Check underlay and top stitching separately — DST jumps between sequences,
+		// so the underlay→fill gap is travel, not a short stitch.
+		for _, sequence := range [][]Stitch{b.Underlay, b.Stitches} {
+			count += len(sequence)
+			for i := 1; i < len(sequence); i++ {
+				n := distance(sequence[i-1].Position, sequence[i].Position)
+				if sequence[i].Command == CommandStitch && n > d.Machine.MaxStitchMM {
+					add(Error, "STITCH_TOO_LONG", fmt.Sprintf("stitch is %.2f mm; maximum is %.2f mm", n, d.Machine.MaxStitchMM), b.RegionID)
+				}
+				if sequence[i].Command == CommandStitch && n > 0 && n < d.Machine.MinStitchMM {
+					shortByRegion[b.RegionID]++
+				}
 			}
 		}
 		if b.Bounds.MaxX-b.Bounds.MinX > d.Machine.HoopWidthMM || b.Bounds.MaxY-b.Bounds.MinY > d.Machine.HoopHeightMM {

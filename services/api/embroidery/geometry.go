@@ -29,6 +29,50 @@ func interpolate(a, b Point, maxLength float64) []Point {
 	return out
 }
 
+// resampleClosed walks a closed ring by arc length so tiny contour edges from
+// traced artwork do not become individual sub-minimum stitches.
+func resampleClosed(ring []Point, spacing float64) []Point {
+	if spacing <= 0 {
+		spacing = 2.5
+	}
+	r := ringClosed(ring)
+	if len(r) < 2 {
+		return nil
+	}
+	path := append([]Point(nil), r...)
+	if path[0] != path[len(path)-1] {
+		path = append(path, path[0])
+	}
+	samples := resampleOpen(path, spacing)
+	if len(samples) > 1 && distance(samples[0], samples[len(samples)-1]) < 1e-6 {
+		samples = samples[:len(samples)-1]
+	}
+	return samples
+}
+
+// pruneShortStitches drops needle moves shorter than minLen (machine minimum).
+// Jumps are kept so travel still reaches the next run; zero-length duplicates go away.
+func pruneShortStitches(stitches []Stitch, minLen float64) []Stitch {
+	if len(stitches) < 2 || minLen <= 0 {
+		return stitches
+	}
+	out := make([]Stitch, 0, len(stitches))
+	out = append(out, stitches[0])
+	for i := 1; i < len(stitches); i++ {
+		s := stitches[i]
+		prev := out[len(out)-1]
+		d := distance(prev.Position, s.Position)
+		if d < 1e-9 {
+			continue
+		}
+		if s.Command == CommandStitch && d < minLen {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 func polygonBounds(p Polygon) Bounds {
 	b := Bounds{MinX: math.Inf(1), MinY: math.Inf(1), MaxX: math.Inf(-1), MaxY: math.Inf(-1)}
 	for _, r := range p.Rings {

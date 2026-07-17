@@ -253,3 +253,40 @@ func TestTatamiPrefersNearestSegmentInRow(t *testing.T) {
 		t.Fatal("expected travel jumps between row segments")
 	}
 }
+
+func TestCompileAvoidsShortStitchesOnJaggedContour(t *testing.T) {
+	// Dense traced-style contour: many sub-millimetre edges that used to become short stitches.
+	ring := []Point{{0, 0}}
+	for i := 1; i <= 200; i++ {
+		ring = append(ring, Point{X: float64(i) * 0.12, Y: math.Sin(float64(i)/8) * 0.08})
+	}
+	for i := 200; i >= 0; i-- {
+		ring = append(ring, Point{X: float64(i) * 0.12, Y: 8 + math.Sin(float64(i)/8)*0.08})
+	}
+	d, err := Compile([]Region{{
+		ID: "jagged", ThreadID: "black", Geometry: Polygon{Rings: [][]Point{ring}},
+		Kind: Tatami, SpacingMM: .45, StitchLengthMM: 3, EdgeUnderlay: true,
+	}}, DefaultProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, diag := range d.Diagnostics {
+		if diag.Code == "STITCH_TOO_SHORT" {
+			t.Fatalf("expected no short-stitch warnings, got %s: %s", diag.Code, diag.Message)
+		}
+	}
+	minLen := DefaultProfile().MinStitchMM
+	for _, block := range d.Plan {
+		for _, sequence := range [][]Stitch{block.Underlay, block.Stitches} {
+			for i := 1; i < len(sequence); i++ {
+				if sequence[i].Command != CommandStitch {
+					continue
+				}
+				n := distance(sequence[i-1].Position, sequence[i].Position)
+				if n > 0 && n < minLen {
+					t.Fatalf("short stitch %.3f mm at index %d source=%s", n, i, sequence[i].Source)
+				}
+			}
+		}
+	}
+}

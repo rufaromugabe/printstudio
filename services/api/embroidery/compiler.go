@@ -8,11 +8,15 @@ import (
 	"math"
 )
 
-const CompilerVersion = "0.2.0"
+const CompilerVersion = "0.2.1"
 
 func Compile(regions []Region, profile MachineProfile) (Document, error) {
 	if profile.ID == "" {
 		profile = DefaultProfile()
+	}
+	minStitch := profile.MinStitchMM
+	if minStitch <= 0 {
+		minStitch = .4
 	}
 	source, _ := json.Marshal(regions)
 	sum := sha256.Sum256(source)
@@ -33,7 +37,7 @@ func Compile(regions []Region, profile MachineProfile) (Document, error) {
 		case Running:
 			block.Stitches = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, 2.5), "running")
 		case Tatami:
-			block.Stitches, err = tatami(r)
+			block.Stitches, err = tatami(r, minStitch)
 		case Satin:
 			block.Underlay, block.Stitches, err = satin(r, profile)
 		default:
@@ -41,6 +45,11 @@ func Compile(regions []Region, profile MachineProfile) (Document, error) {
 		}
 		if err != nil {
 			return d, fmt.Errorf("region %s: %w", r.ID, err)
+		}
+		block.Underlay = pruneShortStitches(block.Underlay, minStitch)
+		// Satin rungs are width pairs; never drop them for length. Running/tatami are safe to prune.
+		if r.Kind != Satin {
+			block.Stitches = pruneShortStitches(block.Stitches, minStitch)
 		}
 		all := append(append([]Stitch{}, block.Underlay...), block.Stitches...)
 		if len(all) > 0 {
@@ -55,20 +64,25 @@ func Compile(regions []Region, profile MachineProfile) (Document, error) {
 }
 
 func runningPath(ring []Point, length float64, source string) []Stitch {
-	r := ringClosed(ring)
-	if len(r) < 2 {
+	if length <= 0 {
+		length = 2.5
+	}
+	samples := resampleClosed(ring, length)
+	if len(samples) < 2 {
 		return nil
 	}
-	out := []Stitch{{Position: r[0], Command: CommandStitch, Source: source}}
-	for i := 1; i < len(r); i++ {
-		for _, p := range interpolate(r[i-1], r[i], length) {
-			out = append(out, Stitch{Position: p, Command: CommandStitch, Source: source})
-		}
+	out := make([]Stitch, 0, len(samples)+1)
+	for _, p := range samples {
+		out = append(out, Stitch{Position: p, Command: CommandStitch, Source: source})
+	}
+	// Close the contour so underlay/running returns to the start.
+	if distance(samples[0], samples[len(samples)-1]) >= 1e-6 {
+		out = append(out, Stitch{Position: samples[0], Command: CommandStitch, Source: source})
 	}
 	return out
 }
 
-func tatami(r Region) ([]Stitch, error) {
+func tatami(r Region, minStitch float64) ([]Stitch, error) {
 	spacing := r.SpacingMM
 	if spacing <= 0 {
 		spacing = .4
@@ -76,6 +90,13 @@ func tatami(r Region) ([]Stitch, error) {
 	length := r.StitchLengthMM
 	if length <= 0 {
 		length = 3
+	}
+	if minStitch <= 0 {
+		minStitch = .4
+	}
+	// Never place fill stitches shorter than the machine minimum.
+	if length < minStitch {
+		length = minStitch
 	}
 	angle := r.AngleDegrees * math.Pi / 180
 	inv := -angle
@@ -127,6 +148,9 @@ func tatami(r Region) ([]Stitch, error) {
 				a, z = z, a
 			}
 			a, z = rotate(a, angle), rotate(z, angle)
+			if distance(a, z) < minStitch {
+				continue
+			}
 			if haveCurrent {
 				out = append(out, Stitch{Position: a, Command: CommandJump, Source: "tatami_travel"})
 			} else {
