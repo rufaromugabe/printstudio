@@ -47,11 +47,12 @@ type SceneElement struct {
 }
 
 type SceneRenderRequest struct {
-	Name     string         `json:"name"`
-	Method   string         `json:"method"`
-	DPI      float64        `json:"dpi"`
-	View     SceneView      `json:"view"`
-	Elements []SceneElement `json:"elements"`
+	Name          string         `json:"name"`
+	Method        string         `json:"method"`
+	DPI           float64        `json:"dpi"`
+	View          SceneView      `json:"view"`
+	Elements      []SceneElement `json:"elements"`
+	CropToContent bool           `json:"cropToContent"`
 }
 
 type AssetFetcher func(assetID string) (io.ReadCloser, error)
@@ -103,6 +104,64 @@ func RenderScene(req SceneRenderRequest, fetch AssetFetcher) (*image.NRGBA, erro
 			drawRotated(out, tile, offset+(element.X+element.W/2)*sx, offset+(element.Y+element.H/2)*sy, float64(tile.Bounds().Dx()), float64(tile.Bounds().Dy()), element.Rotation)
 		default:
 			return nil, fmt.Errorf("unsupported element type %q", element.Type)
+		}
+	}
+	if req.CropToContent {
+		// Keep a small pad so DTF underbase/choke and cutters have room around ink.
+		marginPx := int(math.Ceil(req.DPI / 25.4 * 1.5))
+		cropped, err := CropOpaqueContent(out, marginPx, 8)
+		if err != nil {
+			return nil, err
+		}
+		return cropped, nil
+	}
+	return out, nil
+}
+
+// CropOpaqueContent trims empty transparent padding so export size matches inked artwork.
+func CropOpaqueContent(src *image.NRGBA, marginPx int, alphaCutoff uint8) (*image.NRGBA, error) {
+	if src == nil {
+		return nil, fmt.Errorf("image is required")
+	}
+	bounds := src.Bounds()
+	if bounds.Empty() {
+		return nil, fmt.Errorf("image is empty")
+	}
+	if marginPx < 0 {
+		marginPx = 0
+	}
+	minX, minY := bounds.Max.X, bounds.Max.Y
+	maxX, maxY := bounds.Min.X-1, bounds.Min.Y-1
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if src.NRGBAAt(x, y).A >= alphaCutoff {
+				if x < minX {
+					minX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y > maxY {
+					maxY = y
+				}
+			}
+		}
+	}
+	if maxX < minX || maxY < minY {
+		return nil, fmt.Errorf("no opaque artwork found to size the export")
+	}
+	minX = maxInt(bounds.Min.X, minX-marginPx)
+	minY = maxInt(bounds.Min.Y, minY-marginPx)
+	maxX = minInt(bounds.Max.X-1, maxX+marginPx)
+	maxY = minInt(bounds.Max.Y-1, maxY+marginPx)
+	rect := image.Rect(0, 0, maxX-minX+1, maxY-minY+1)
+	out := image.NewNRGBA(rect)
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			out.SetNRGBA(x-minX, y-minY, src.NRGBAAt(x, y))
 		}
 	}
 	return out, nil

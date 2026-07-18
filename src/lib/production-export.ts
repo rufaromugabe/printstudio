@@ -5,6 +5,8 @@ type ExportElement=DigitizerElement&{assetId?:string;sourceWidth?:number;sourceH
 export type ProductionMethod="DTF"|"Vinyl"|"Screen print"|"Sublimation";
 export type ProductionResult={method:ProductionMethod;blob:Blob;fileName:string;mime:string;previewUrl:string;summary:string;warnings:string[];widthMM:number;heightMM:number;pixelWidth?:number;pixelHeight?:number;sha256?:string;renderer?:"server"|"browser"};
 
+const CONTENT_MARGIN_MM=1.5;
+
 export async function refreshExportElementURLs(elements:ExportElement[]):Promise<ExportElement[]>{
   return Promise.all(elements.map(async element=>{
     if(element.type!=="image"||!element.assetId)return element;
@@ -23,17 +25,22 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
   elements=await refreshExportElementURLs(elements);
   const capabilities=await api.productionCapabilities().catch(()=>null);
   if(method==="DTF"||method==="Sublimation"){
-    const bleed=method==="Sublimation"?(view.bleedMm??3):0,dpi=300,widthMM=view.physicalWidthMm+bleed*2,heightMM=view.physicalHeightMm+bleed*2;
+    const bleed=method==="Sublimation"?(view.bleedMm??3):0,dpi=300;
+    const cropToContent=method==="DTF";
+    const fullWidthMM=view.physicalWidthMm+bleed*2,fullHeightMM=view.physicalHeightMm+bleed*2;
     for(const e of elements)if(e.type==="image"&&e.sourceWidth){const physical=e.w/view.canvasWidth*view.physicalWidthMm,dpiActual=e.sourceWidth/(physical/25.4);if(dpiActual<150)warnings.push(`${layerName(e)} is only ${Math.round(dpiActual)} DPI at its placed size.`);else if(dpiActual<300)warnings.push(`${layerName(e)} is ${Math.round(dpiActual)} DPI; 300 DPI is preferred.`)}
     if(method==="Sublimation"&&!coversCanvas(elements,view))warnings.push("Artwork does not cover the full bleed area; unprinted edges may appear after pressing.");
     const rendered=await api.productionRenderScene({
-      name:clean,method,dpi,
+      name:clean,method,dpi,cropToContent,
       view:{canvasWidth:view.canvasWidth,canvasHeight:view.canvasHeight,physicalWidthMm:view.physicalWidthMm,physicalHeightMm:view.physicalHeightMm,bleedMm:bleed},
       elements:elements.map(e=>({id:e.id,type:e.type,value:e.value,assetId:e.assetId,x:e.x,y:e.y,w:e.w,h:e.h,rotation:e.rotation,color:e.color,fontSize:e.fontSize,fontWeight:e.fontWeight,letterSpacing:e.letterSpacing,lineHeight:e.lineHeight,sourceWidth:e.sourceWidth,sourceHeight:e.sourceHeight})),
     });
-    const pixelWidth=rendered.widthPx||Math.ceil(widthMM/25.4*dpi),pixelHeight=rendered.heightPx||Math.ceil(heightMM/25.4*dpi);
+    const pixelWidth=rendered.widthPx||Math.ceil(fullWidthMM/25.4*dpi),pixelHeight=rendered.heightPx||Math.ceil(fullHeightMM/25.4*dpi);
+    const widthMM=cropToContent?pixelsToMM(pixelWidth,dpi):fullWidthMM;
+    const heightMM=cropToContent?pixelsToMM(pixelHeight,dpi):fullHeightMM;
     warnings.push("Rendered on the production server (not the browser canvas).");
-    return{method,blob:rendered.blob,fileName:`${clean}-${method.toLowerCase().replace(" ","-")}-300dpi.png`,mime:"image/png",previewUrl:URL.createObjectURL(rendered.blob),summary:`Server ${pixelWidth} × ${pixelHeight}px at 300 DPI${bleed?` with ${bleed} mm bleed`:""}`,warnings,widthMM,heightMM,pixelWidth,pixelHeight,sha256:rendered.sha256,renderer:"server"};
+    if(cropToContent)warnings.push(`Sized to inked artwork (${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm), not the full print area.`);
+    return{method,blob:rendered.blob,fileName:`${clean}-${method.toLowerCase().replace(" ","-")}-300dpi.png`,mime:"image/png",previewUrl:URL.createObjectURL(rendered.blob),summary:`Server ${pixelWidth} × ${pixelHeight}px at 300 DPI · ${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm${bleed?` with ${bleed} mm bleed`:""}`,warnings,widthMM,heightMM,pixelWidth,pixelHeight,sha256:rendered.sha256,renderer:"server"};
   }
   const traced=await digitizeElements(elements,view);
   if(method==="Vinyl"){
@@ -43,13 +50,15 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     if(tiny)warnings.push(`${tiny} contour(s) contain details under 1 mm that may weed poorly.`);
     const holeCount=Math.max(0,cleaned.length-traced.regions.length);
     if(holeCount>0)warnings.push(`Kept ${holeCount} interior cutout(s) for weeding.`);
-    const compound=cleaned.map(path=>pathToSVG(path)).join("");
-    const transform=mirrorVinyl?`translate(${view.physicalWidthMm} 0) scale(-1 1)`:"";
-    const weed=`<rect id="weed-box" x="0.5" y="0.5" width="${Math.max(0,view.physicalWidthMm-1)}" height="${Math.max(0,view.physicalHeightMm-1)}" fill="none" stroke="#000" stroke-width="0.15"/>`;
-    const svg=svgEnvelope(view,`<g transform="${transform}"><path d="${compound}" fill="#111111" fill-opacity="0.16" stroke="#000" stroke-width="0.15" fill-rule="evenodd"/></g>${weed}`);
+    const framed=framePathsToContent(cleaned,CONTENT_MARGIN_MM);
+    const compound=framed.paths.map(path=>pathToSVG(path)).join("");
+    const transform=mirrorVinyl?`translate(${framed.widthMM} 0) scale(-1 1)`:"";
+    const weed=`<rect id="weed-box" x="0.5" y="0.5" width="${Math.max(0,framed.widthMM-1)}" height="${Math.max(0,framed.heightMM-1)}" fill="none" stroke="#000" stroke-width="0.15"/>`;
+    const svg=svgEnvelope(framed.widthMM,framed.heightMM,`<g transform="${transform}"><path d="${compound}" fill="#111111" fill-opacity="0.16" stroke="#000" stroke-width="0.15" fill-rule="evenodd"/></g>${weed}`);
     const blob=new Blob([svg],{type:"image/svg+xml"});
     const sha256=await hashBlob(blob);
-    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${cleaned.length} contours · weed box`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm,sha256,renderer:"server"};
+    warnings.push(`Sized to cut contours (${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm), not the full print area.`);
+    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${cleaned.length} contours · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server"};
   }
   const colors=[...new Set(traced.regions.map(r=>r.threadId))];
   if(colors.length>8)warnings.push(`${colors.length} colours create ${colors.length} screen separations; consider reducing the palette.`);
@@ -60,10 +69,16 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
   }catch(error){
     warnings.push(error instanceof Error?error.message:"Spot-colour matching failed for one or more inks.");
   }
-  const groups=colors.map((color,i)=>`<g id="separation-${i+1}" data-ink="${escapeXML(color)}" fill="${validColor(color)}" fill-rule="evenodd">${traced.regions.filter(r=>r.threadId===color).map(r=>ringsPath(r.geometry.rings,view)).map(d=>`<path d="${d}"/>`).join("")}</g>`).join("");
-  const svg=svgEnvelope(view,groups);const blob=new Blob([svg],{type:"image/svg+xml"});
+  const printPaths=traced.regions.flatMap(r=>r.geometry.rings.map(ring=>ring.map(p=>({x:p.x+view.physicalWidthMm/2,y:p.y+view.physicalHeightMm/2}))));
+  const framed=framePathsToContent(printPaths,CONTENT_MARGIN_MM);
+  const groups=colors.map((color,i)=>{
+    const regionPaths=traced.regions.filter(r=>r.threadId===color).flatMap(r=>r.geometry.rings.map(ring=>ring.map(p=>({x:p.x+view.physicalWidthMm/2-framed.originX,y:p.y+view.physicalHeightMm/2-framed.originY}))));
+    return `<g id="separation-${i+1}" data-ink="${escapeXML(color)}" fill="${validColor(color)}" fill-rule="evenodd">${regionPaths.map(path=>`<path d="${pathToSVG(path)}"/>`).join("")}</g>`;
+  }).join("");
+  const svg=svgEnvelope(framed.widthMM,framed.heightMM,groups);const blob=new Blob([svg],{type:"image/svg+xml"});
   const sha256=await hashBlob(blob);
-  return{method,blob,fileName:`${clean}-screen-separations.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Layered screen-print SVG · ${colors.length} ink separation${colors.length===1?"":"s"}`,warnings,widthMM:view.physicalWidthMm,heightMM:view.physicalHeightMm,sha256,renderer:"server"};
+  warnings.push(`Sized to inked artwork (${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm), not the full print area.`);
+  return{method,blob,fileName:`${clean}-screen-separations.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Layered screen-print SVG · ${colors.length} ink separation${colors.length===1?"":"s"} · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server"};
 }
 
 async function cleanVinylPaths(ringsList:{x:number;y:number}[][][],view:DigitizerView):Promise<PolygonPaths>{
@@ -96,12 +111,21 @@ async function cleanVinylPaths(ringsList:{x:number;y:number}[][][],view:Digitize
   return normalized.paths.length?normalized.paths:merged;
 }
 
+export function framePathsToContent(paths:{x:number;y:number}[][],marginMM=CONTENT_MARGIN_MM){
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const path of paths)for(const p of path){if(p.x<minX)minX=p.x;if(p.y<minY)minY=p.y;if(p.x>maxX)maxX=p.x;if(p.y>maxY)maxY=p.y}
+  if(!Number.isFinite(minX)||!Number.isFinite(minY)||maxX<minX||maxY<minY)throw new Error("No artwork contours were produced to size the export.");
+  const originX=minX-marginMM,originY=minY-marginMM;
+  const widthMM=Math.max(0.1,maxX-minX+marginMM*2),heightMM=Math.max(0.1,maxY-minY+marginMM*2);
+  return{originX,originY,widthMM,heightMM,paths:paths.map(path=>path.map(p=>({x:p.x-originX,y:p.y-originY})))};
+}
+
 function pathToSVG(path:{x:number;y:number}[]){return path.map((p,i)=>`${i?"L":"M"}${p.x.toFixed(3)} ${p.y.toFixed(3)}`).join(" ")+" Z"}
-function ringsPath(rings:{x:number;y:number}[][],view:DigitizerView){return rings.map(r=>r.map((p,i)=>`${i?"L":"M"}${(p.x+view.physicalWidthMm/2).toFixed(3)} ${(p.y+view.physicalHeightMm/2).toFixed(3)}`).join(" ")+" Z").join(" ")}
-function svgEnvelope(view:DigitizerView,body:string){return `<svg xmlns="http://www.w3.org/2000/svg" width="${view.physicalWidthMm}mm" height="${view.physicalHeightMm}mm" viewBox="0 0 ${view.physicalWidthMm} ${view.physicalHeightMm}"><metadata>PrintStudio production export; units=mm</metadata>${body}</svg>`}
+function svgEnvelope(widthMM:number,heightMM:number,body:string){return `<svg xmlns="http://www.w3.org/2000/svg" width="${widthMM}mm" height="${heightMM}mm" viewBox="0 0 ${widthMM} ${heightMM}"><metadata>PrintStudio production export; units=mm; sized to artwork content</metadata>${body}</svg>`}
 function coversCanvas(elements:ExportElement[],view:DigitizerView){return elements.some(e=>e.x<=0&&e.y<=0&&e.x+e.w>=view.canvasWidth&&e.y+e.h>=view.canvasHeight)}
 function layerName(e:ExportElement){return e.type==="text"?`Text “${e.value.slice(0,20)}”`:"Uploaded artwork"}
 function safeName(name:string){return name.trim().replace(/[^a-z0-9_-]+/gi,"-").replace(/^-|-$/g,"")||"printstudio-design"}
 function escapeXML(value:string){return value.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[c]!))}
 function validColor(value:string){return /^#[0-9a-f]{6}$/i.test(value)?value:"#000000"}
+function pixelsToMM(px:number,dpi:number){return px/dpi*25.4}
 async function hashBlob(blob:Blob){const digest=await crypto.subtle.digest("SHA-256",await blob.arrayBuffer());return Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,"0")).join("")}

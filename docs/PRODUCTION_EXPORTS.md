@@ -1,13 +1,13 @@
 # Production Export Engine
 
-PrintStudio dispatches the studio Export action according to the selected decoration method. Every output uses the active product view's physical dimensions rather than browser pixels.
+PrintStudio dispatches the studio Export action according to the selected decoration method. Dimensions are always physical millimetres (never browser CSS pixels). DTF, vinyl and screen exports size to the inked/cut artwork content; sublimation keeps the full product print area plus bleed.
 
 ## DTF
 
 Current output:
 
 - Transparent 300-DPI PNG
-- Exact physical print-area dimensions
+- Physical size cropped to opaque artwork (plus a small production margin), not the full garment print area
 - Styled, rotated and circular text
 - Original transparent artwork compositing
 - Effective-DPI calculation at placed size
@@ -27,17 +27,18 @@ Current output:
 - Transparent-hole preservation using even-odd paths
 - Mirroring enabled by default and switchable in the review dialog
 - Multiple disconnected contours
+- ViewBox, weed box and declared size fitted to cut contours (plus margin)
 - Warning for details below 1 mm
 - Clipper2 union cleanup is required; exports fail closed when `polygonBoolean` is unavailable
 
-Remaining specialist work includes automatic weed boxes refinements, multi-colour registration marks and blade/material profiles.
+Remaining specialist work includes multi-colour registration marks and blade/material profiles.
 
 ## Screen printing
 
 Current output:
 
 - Layered SVG grouped by ink colour
-- Physical millimetre dimensions
+- Physical millimetre dimensions fitted to inked separations (plus margin)
 - Solid vector silhouettes for traced elements
 - Colour-count warning above eight inks
 - Explicit warning when raster artwork would require halftone separation

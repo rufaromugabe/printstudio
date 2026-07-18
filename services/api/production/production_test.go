@@ -339,3 +339,45 @@ func TestRenderSceneTextOnly(t *testing.T) {
 		t.Fatal("empty scene")
 	}
 }
+
+func TestRenderSceneCropToContent(t *testing.T) {
+	full, err := RenderScene(SceneRenderRequest{
+		DPI: 72,
+		View: SceneView{CanvasWidth: 200, CanvasHeight: 200, PhysicalWidthMm: 100, PhysicalHeightMm: 100},
+		Elements: []SceneElement{{ID: "t1", Type: "text", Value: "HI", X: 70, Y: 70, W: 60, H: 40, FontSize: 28, Color: "#112233"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cropped, err := RenderScene(SceneRenderRequest{
+		DPI:           72,
+		CropToContent: true,
+		View:          SceneView{CanvasWidth: 200, CanvasHeight: 200, PhysicalWidthMm: 100, PhysicalHeightMm: 100},
+		Elements:      []SceneElement{{ID: "t1", Type: "text", Value: "HI", X: 70, Y: 70, W: 60, H: 40, FontSize: 28, Color: "#112233"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cropped.Bounds().Dx() >= full.Bounds().Dx() || cropped.Bounds().Dy() >= full.Bounds().Dy() {
+		t.Fatalf("crop should shrink below full print area: full=%v cropped=%v", full.Bounds(), cropped.Bounds())
+	}
+	if cropped.Bounds().Dx() < 8 || cropped.Bounds().Dy() < 8 {
+		t.Fatalf("cropped artwork unexpectedly tiny: %v", cropped.Bounds())
+	}
+}
+
+func TestCropOpaqueContent(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 100, 80))
+	for y := 30; y < 50; y++ {
+		for x := 40; x < 70; x++ {
+			src.SetNRGBA(x, y, color.NRGBA{R: 10, G: 20, B: 30, A: 255})
+		}
+	}
+	out, err := CropOpaqueContent(src, 2, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Bounds().Dx() != 34 || out.Bounds().Dy() != 24 {
+		t.Fatalf("unexpected crop size %v", out.Bounds())
+	}
+}
