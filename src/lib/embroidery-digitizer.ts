@@ -1,18 +1,31 @@
-import { EmbroideryPoint, EmbroideryRegion } from "./api";
+import { api, EmbroideryPoint, EmbroideryRegion, VectorContourSet } from "./api";
 import { nearestThread, ThreadBrand } from "./thread-charts";
 
-export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number};
+export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number;assetId?:string};
 export type DigitizerView={canvasWidth:number;canvasHeight:number;physicalWidthMm:number;physicalHeightMm:number};
-export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>};
+export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>;vectorDiagnostics?:{code:string;message:string;severity:string}[]};
 
 const MAX_IMAGE_THREADS=8;
 const ALPHA_CUTOFF=32;
 
-export async function digitizeElements(elements:DigitizerElement[],view:DigitizerView,options?:{threadBrand?:ThreadBrand;mode?:"color"|"silhouette"}):Promise<Digitization>{
+export type DigitizeOptions={
+  threadBrand?:ThreadBrand;
+  mode?:"color"|"silhouette";
+  method?:"vinyl"|"embroidery"|"screen"|string;
+  /** Optional ML prep before Potrace. Image layers always use server vectorize. */
+  mlPrep?:boolean;
+};
+
+export async function digitizeElements(elements:DigitizerElement[],view:DigitizerView,options?:DigitizeOptions):Promise<Digitization>{
   const regions:EmbroideryRegion[]=[],failures:string[]=[],threadLabels:Record<string,string>={},brand=options?.threadBrand??"none",mode=options?.mode??"color";
+  const method=(options?.method??"embroidery") as "vinyl"|"embroidery"|"screen";
+  const mlPrep=options?.mlPrep??true;
+  const vectorDiagnostics:{code:string;message:string;severity:string}[]=[];
   for(const element of elements){
     try{
-      const layers=await extractColorLayers(element,mode);
+      const layers=element.type==="image"
+        ? await extractImageLayersServer(element,view,mode,method,mlPrep,vectorDiagnostics)
+        : await extractTextLayers(element);
       if(!layers.length){failures.push(element.id);continue}
       for(const [layerIndex,layer] of layers.entries()){
         const matched=nearestThread(layer.threadId,brand);
@@ -23,10 +36,13 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
           const kind=element.embroideryKind&&element.embroideryKind!=="auto"?element.embroideryKind:(autoSatin?"satin":"tatami");
           const underlay=element.embroideryUnderlay??"auto";
           const satin=kind==="satin";
+          const rings=layer.units==="mm"
+            ? polygon
+            : polygon.map(r=>r.map(p=>toPhysical(p,element,view)));
           regions.push({
             id:`${element.id}-${layerIndex}-${index}`,
             threadId:matched.hex,
-            geometry:{rings:polygon.map(r=>r.map(p=>toPhysical(p,element,view)))},
+            geometry:{rings},
             kind,
             spacingMm:element.embroiderySpacing??.45,
             stitchLengthMm:element.embroideryStitchLength??3,
@@ -37,16 +53,76 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
           });
         });
       }
-    }catch{failures.push(element.id)}
+    }catch(error){
+      if(element.type==="image"){
+        throw error instanceof Error?error:new Error("Server vectorize failed for an image layer");
+      }
+      failures.push(element.id);
+    }
   }
-  if(failures.length)throw new Error(`${failures.length} layer(s) could not be traced into production contours. Re-upload artwork with CORS-readable pixels or convert to editable text/shapes — boundary rectangles are no longer accepted as a production fallback.`);
+  if(failures.length)throw new Error(`${failures.length} layer(s) could not be traced into production contours. Re-upload artwork with CORS-readable pixels or convert to editable text/shapes.`);
   if(!regions.length)throw new Error("No production contours were produced from the design.");
-  return{regions,fallbacks:[],threadLabels};
+  return{regions,fallbacks:[],threadLabels,vectorDiagnostics};
 }
 
-type ColorLayer={threadId:string;rings:EmbroideryPoint[][]};
+type ColorLayer={threadId:string;rings:EmbroideryPoint[][];units?:"px"|"mm"};
 
-async function extractColorLayers(element:DigitizerElement,mode:"color"|"silhouette"="color"):Promise<ColorLayer[]>{
+async function extractImageLayersServer(
+  element:DigitizerElement,
+  view:DigitizerView,
+  mode:"color"|"silhouette",
+  method:"vinyl"|"embroidery"|"screen",
+  mlPrep:boolean,
+  diagnostics:{code:string;message:string;severity:string}[],
+):Promise<ColorLayer[]>{
+  const placement={
+    canvasWidth:view.canvasWidth,
+    canvasHeight:view.canvasHeight,
+    physicalWidthMm:view.physicalWidthMm,
+    physicalHeightMm:view.physicalHeightMm,
+    x:element.x,y:element.y,w:element.w,h:element.h,rotation:element.rotation,
+  };
+  if(mode==="silhouette"||element.color){
+    const blob=await renderElementPNG(element);
+    const contours=await api.productionVectorize(blob,{method,mlPrep,placement});
+    pushDiagnostics(diagnostics,contours);
+    return[{threadId:element.color||"#222222",rings:contours.rings,units:"mm"}];
+  }
+  const {width,height,data,scale}=await rasterizeElement(element);
+  const palette=buildPalette(data,width,height,MAX_IMAGE_THREADS);
+  if(!palette.length)return[];
+  const labels=assignPixels(data,width,height,palette);
+  const layers:ColorLayer[]=[];
+  for(let c=0;c<palette.length;c++){
+    const mask=new Uint8Array(width*height);
+    let count=0;
+    for(let i=0;i<mask.length;i++)if(labels[i]===c){mask[i]=1;count++}
+    if(count<8)continue;
+    const blob=await maskToPNG(mask,width,height);
+    // Rings come back in mask pixel space; map into element-local px then physical mm client-side.
+    const contours=await api.productionVectorize(blob,{method,mlPrep});
+    pushDiagnostics(diagnostics,contours);
+    const rings=contours.rings.map(r=>r.map(p=>({x:p.x/scale,y:p.y/scale})));
+    layers.push({threadId:rgbHex(palette[c]),rings,units:"px"});
+  }
+  return layers;
+}
+
+function pushDiagnostics(out:{code:string;message:string;severity:string}[],contours:VectorContourSet){
+  for(const d of contours.diagnostics??[])out.push({code:d.code,message:d.message,severity:d.severity});
+}
+
+/** Editable text stays on the glyph/canvas tracer (not a production fallback for images). */
+async function extractTextLayers(element:DigitizerElement):Promise<ColorLayer[]>{
+  const {width,height,data,scale}=await rasterizeElement(element);
+  const mask=new Uint8Array(width*height);
+  for(let i=0;i<mask.length;i++)mask[i]=data[i*4+3]>=ALPHA_CUTOFF?1:0;
+  const rings=traceMask(mask,width,height).map(r=>simplify(r.map(p=>({x:p.x/scale,y:p.y/scale})),.35));
+  if(!rings.length)return[];
+  return[{threadId:element.color||"#222222",rings}];
+}
+
+async function rasterizeElement(element:DigitizerElement){
   const scale=Math.min(4,Math.max(1,800/Math.max(element.w,element.h)));
   const width=Math.max(2,Math.ceil(element.w*scale));
   const height=Math.max(2,Math.ceil(element.h*scale));
@@ -61,31 +137,31 @@ async function extractColorLayers(element:DigitizerElement,mode:"color"|"silhoue
   }else{
     renderText(ctx,element);
   }
-  const data=ctx.getImageData(0,0,width,height).data;
+  return{width,height,scale,data:ctx.getImageData(0,0,width,height).data,canvas};
+}
 
-  // Vinyl / single-colour cuts need the opaque silhouette, not anti-aliased edge colours.
-  if(mode==="silhouette"||element.type==="text"||element.color){
-    const mask=new Uint8Array(width*height);
-    for(let i=0;i<mask.length;i++)mask[i]=data[i*4+3]>=ALPHA_CUTOFF?1:0;
-    const rings=traceMask(mask,width,height).map(r=>simplify(r.map(p=>({x:p.x/scale,y:p.y/scale})),.35));
-    if(!rings.length)return[];
-    return[{threadId:element.color||"#222222",rings}];
-  }
+async function renderElementPNG(element:DigitizerElement):Promise<Blob>{
+  const {canvas}=await rasterizeElement(element);
+  const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/png"));
+  if(!blob)throw new Error("could not encode layer PNG for vectorize");
+  return blob;
+}
 
-  const palette=buildPalette(data,width,height,MAX_IMAGE_THREADS);
-  if(!palette.length)return[];
-  const labels=assignPixels(data,width,height,palette);
-  const layers:ColorLayer[]=[];
-  for(let c=0;c<palette.length;c++){
-    const mask=new Uint8Array(width*height);
-    let count=0;
-    for(let i=0;i<mask.length;i++)if(labels[i]===c){mask[i]=1;count++}
-    if(count<8)continue;
-    const rings=traceMask(mask,width,height).map(r=>simplify(r.map(p=>({x:p.x/scale,y:p.y/scale})),.35));
-    if(!rings.length)continue;
-    layers.push({threadId:rgbHex(palette[c]),rings});
+async function maskToPNG(mask:Uint8Array,w:number,h:number):Promise<Blob>{
+  const canvas=document.createElement("canvas");
+  canvas.width=w;canvas.height=h;
+  const ctx=canvas.getContext("2d");
+  if(!ctx)throw new Error("canvas unavailable");
+  const image=ctx.createImageData(w,h);
+  for(let i=0;i<mask.length;i++){
+    const on=mask[i]===1;
+    const o=i*4;
+    image.data[o]=0;image.data[o+1]=0;image.data[o+2]=0;image.data[o+3]=on?255:0;
   }
-  return layers;
+  ctx.putImageData(image,0,0);
+  const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/png"));
+  if(!blob)throw new Error("could not encode mask PNG for vectorize");
+  return blob;
 }
 
 type RGB={r:number;g:number;b:number};

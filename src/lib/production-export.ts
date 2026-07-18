@@ -4,7 +4,8 @@ import { digitizeElements, DigitizerElement, DigitizerView } from "./embroidery-
 type ExportElement=DigitizerElement&{assetId?:string;sourceWidth?:number;sourceHeight?:number;textAlign?:"left"|"center"|"right";lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean};
 export type ProductionMethod="DTF"|"Vinyl"|"Screen print"|"Sublimation";
 export type ProductionResult={method:ProductionMethod;blob:Blob;fileName:string;mime:string;previewUrl:string;summary:string;warnings:string[];widthMM:number;heightMM:number;pixelWidth?:number;pixelHeight?:number;sha256?:string;renderer?:"server"|"browser";vinylReview?:VinylReview;vinylBlocked?:boolean};
-export type VinylExportOptions={mirror?:boolean;materialClass?:VinylMaterialClass|string};
+export type VinylExportOptions={mirror?:boolean;materialClass?:VinylMaterialClass|string;advancedVectorize?:boolean};
+export type ContourExportOptions={mirror?:boolean;materialClass?:VinylMaterialClass|string;advancedVectorize?:boolean};
 
 const CONTENT_MARGIN_MM=1.5;
 const DEFAULT_VINYL_MATERIAL:VinylMaterialClass="htv-smooth";
@@ -21,9 +22,9 @@ export async function refreshExportElementURLs(elements:ExportElement[]):Promise
   }));
 }
 
-export async function prepareProductionExport(method:ProductionMethod,name:string,elements:ExportElement[],view:DigitizerView&{bleedMm?:number},mirrorOrOptions:boolean|VinylExportOptions=true):Promise<ProductionResult>{
+export async function prepareProductionExport(method:ProductionMethod,name:string,elements:ExportElement[],view:DigitizerView&{bleedMm?:number},mirrorOrOptions:boolean|ContourExportOptions=true):Promise<ProductionResult>{
   if(!elements.length)throw new Error("Add at least one design element before exporting.");
-  const vinylOpts:VinylExportOptions=typeof mirrorOrOptions==="boolean"?{mirror:mirrorOrOptions}:{...mirrorOrOptions};
+  const vinylOpts:ContourExportOptions=typeof mirrorOrOptions==="boolean"?{mirror:mirrorOrOptions}:{...mirrorOrOptions};
   const mirrorVinyl=vinylOpts.mirror??true;
   const materialClass=(vinylOpts.materialClass||DEFAULT_VINYL_MATERIAL) as VinylMaterialClass;
   const clean=safeName(name),warnings:string[]=[];
@@ -47,7 +48,18 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     if(cropToContent)warnings.push(`Sized to inked artwork (${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm), not the full print area.`);
     return{method,blob:rendered.blob,fileName:`${clean}-${method.toLowerCase().replace(" ","-")}-300dpi.png`,mime:"image/png",previewUrl:URL.createObjectURL(rendered.blob),summary:`Server ${pixelWidth} × ${pixelHeight}px at 300 DPI · ${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm${bleed?` with ${bleed} mm bleed`:""}`,warnings,widthMM,heightMM,pixelWidth,pixelHeight,sha256:rendered.sha256,renderer:"server"};
   }
-  const traced=await digitizeElements(elements,view,method==="Vinyl"?{mode:"silhouette"}:undefined);
+  if(elements.some(e=>e.type==="image")&&!capabilities?.vectorTrace){
+    throw new Error("Image layers require server Potrace vectorize. Install potrace / set POTRACE_BIN on the API.");
+  }
+  const mlPrep=vinylOpts.advancedVectorize!==false;
+  const traced=await digitizeElements(elements,view,{
+    mode:method==="Vinyl"?"silhouette":"color",
+    method:method==="Vinyl"?"vinyl":"screen",
+    mlPrep,
+  });
+  for(const d of traced.vectorDiagnostics??[]){
+    if(d.severity==="error"||d.severity==="warning")warnings.push(`Vectorize ${d.severity}: ${d.message}`);
+  }
   if(method==="Vinyl"){
     if(!capabilities?.polygonBoolean)throw new Error("Vinyl cut paths require the Clipper2 production backend. Rebuild/deploy the API with -tags clipper2 — approximate contour exports are disabled.");
     const exteriorCount=traced.regions.length;

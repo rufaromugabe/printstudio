@@ -74,6 +74,7 @@ export default function Home() {
   const [productionError,setProductionError]=useState("");
   const [mirrorVinyl,setMirrorVinyl]=useState(true);
   const [vinylMaterialClass,setVinylMaterialClass]=useState<VinylMaterialClass>("htv-smooth");
+  const [advancedVectorize,setAdvancedVectorize]=useState(true);
   const [exportHistory,setExportHistory]=useState<ExportRecord[]>([]);
   const [formatState,setFormatState]=useState("");
   const [gangCopies,setGangCopies]=useState(2);
@@ -294,7 +295,11 @@ export default function Home() {
       if(element.type!=="image"||!element.assetId)return element;
       try{return{...element,value:(await api.assetURL(element.assetId)).url}}catch{return element}
     }));
-    const result=await digitizeElements(refreshed,currentView,{threadBrand:embroideryDefaults.threadBrand});
+    const caps=await api.productionCapabilities().catch(()=>null);
+    if(refreshed.some(e=>e.type==="image")&&!caps?.vectorTrace){
+      throw new Error("Image layers require server Potrace vectorize. Install potrace / set POTRACE_BIN on the API.");
+    }
+    const result=await digitizeElements(refreshed,currentView,{threadBrand:embroideryDefaults.threadBrand,method:"embroidery",mlPrep:advancedVectorize});
     setThreadLabels(result.threadLabels);
     const request:EmbroideryRequest={name:design.name,fabricClass:embroideryDefaults.fabricClass,regions:result.regions,machine:{id:"generic-130x180",name:"Generic 130 x 180 mm",hoopWidthMm:130,hoopHeightMm:180,maxStitches:100000,maxColors:16,minStitchMm:.4,maxStitchMm:12.1,maxJumpMm:12.1}};
     embroideryRequestRef.current=request;
@@ -303,7 +308,7 @@ export default function Home() {
   const openEmbroidery=async()=>{if(design.method.toLowerCase()!=="embroidery"){setEmbroideryError("Select Embroidery as the decoration method first.");setEmbroidery(null);return}if(!active.length){setEmbroideryError("Add at least one design element before compiling.");setEmbroidery(null);return}setEmbroideryState("compiling");setEmbroideryError("");try{setEmbroidery(await api.compileEmbroidery(await embroideryRequest()));setEmbroideryState("idle")}catch(error){embroideryRequestRef.current=null;setEmbroideryError(error instanceof Error?error.message:"Compilation failed");setEmbroideryState("error")}};
   const downloadEmbroidery=async()=>{setEmbroideryState("exporting");try{const request=embroideryRequestRef.current??await embroideryRequest();const blob=await api.exportEmbroidery(request);const url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download=`${design.name.replace(/[^a-z0-9_-]+/gi,"-")||"printstudio-design"}.dst`;link.click();URL.revokeObjectURL(url);setEmbroideryState("idle")}catch(error){setEmbroideryError(error instanceof Error?error.message:"Export failed");setEmbroideryState("error")}};
   const productionMethod=():ProductionMethod|null=>{const method=design.method.toLowerCase();if(method==="dtf")return"DTF";if(method.includes("vinyl"))return"Vinyl";if(method.includes("screen"))return"Screen print";if(method.includes("sublimation"))return"Sublimation";return null};
-  const prepareProduction=async(mirror=mirrorVinyl)=>{const method=productionMethod();if(!method){setProductionError(`${design.method} production export is not implemented yet.`);return}setProductionState("preparing");setProductionError("");setProofId("");setProofState("none");if(production)URL.revokeObjectURL(production.previewUrl);try{setProduction(await prepareProductionExport(method,design.name,active,currentView,method==="Vinyl"?{mirror,materialClass:vinylMaterialClass}:mirror));setProductionState("idle")}catch(error){setProduction(null);setProductionError(error instanceof Error?error.message:"Production export failed");setProductionState("error")}};
+  const prepareProduction=async(mirror=mirrorVinyl)=>{const method=productionMethod();if(!method){setProductionError(`${design.method} production export is not implemented yet.`);return}setProductionState("preparing");setProductionError("");setProofId("");setProofState("none");if(production)URL.revokeObjectURL(production.previewUrl);try{setProduction(await prepareProductionExport(method,design.name,active,currentView,method==="Vinyl"?{mirror,materialClass:vinylMaterialClass,advancedVectorize}:{advancedVectorize}));setProductionState("idle")}catch(error){setProduction(null);setProductionError(error instanceof Error?error.message:"Production export failed");setProductionState("error")}};
   const exportDesign=()=>{if(design.method.toLowerCase()==="embroidery")void openEmbroidery();else void prepareProduction()};
   const embroideryStitchFieldMM=(()=>{
     if(!embroidery?.document.plan.length)return "";
@@ -398,7 +403,7 @@ export default function Home() {
           {design.method.toLowerCase()==="embroidery"&&<EmbroideryControls element={selectedElement} onChange={patch=>patchElement(selectedElement.id,patch)}/>} 
           <button className="delete" onClick={remove}>Delete element</button>
         </> : <div className="empty-prop"><span>✓</span><strong>{warnings ? `${warnings} placement warning${warnings>1?"s":""}` : "Ready to print"}</strong><p>Select an element to edit its size, content and colour.</p></div>}
-        <MethodSettings method={design.method} iccCombo={iccCombo} setIccCombo={setIccCombo} iccCombinations={iccCombinations} mirrorVinyl={mirrorVinyl} setMirrorVinyl={setMirrorVinyl} vinylMaterialClass={vinylMaterialClass} setVinylMaterialClass={setVinylMaterialClass} dtfTrapPreset={dtfTrapPreset} setDtfTrapPreset={setDtfTrapPreset} dtfUnderbaseSpread={dtfUnderbaseSpread} setDtfUnderbaseSpread={setDtfUnderbaseSpread} screenLpi={screenLpi} setScreenLpi={setScreenLpi} screenMode={screenMode} setScreenMode={setScreenMode} screenTrapPreset={screenTrapPreset} setScreenTrapPreset={setScreenTrapPreset} embroideryDefaults={embroideryDefaults} setEmbroideryDefaults={setEmbroideryDefaults} gang={{copies:gangCopies,width:gangWidth,height:gangHeight,fillSheet:gangFillSheet,gap:gangGap,setCopies:setGangCopies,setWidth:setGangWidth,setHeight:setGangHeight,setFillSheet:setGangFillSheet,setGap:setGangGap}}/>
+        <MethodSettings method={design.method} iccCombo={iccCombo} setIccCombo={setIccCombo} iccCombinations={iccCombinations} mirrorVinyl={mirrorVinyl} setMirrorVinyl={setMirrorVinyl} vinylMaterialClass={vinylMaterialClass} setVinylMaterialClass={setVinylMaterialClass} advancedVectorize={advancedVectorize} setAdvancedVectorize={setAdvancedVectorize} dtfTrapPreset={dtfTrapPreset} setDtfTrapPreset={setDtfTrapPreset} dtfUnderbaseSpread={dtfUnderbaseSpread} setDtfUnderbaseSpread={setDtfUnderbaseSpread} screenLpi={screenLpi} setScreenLpi={setScreenLpi} screenMode={screenMode} setScreenMode={setScreenMode} screenTrapPreset={screenTrapPreset} setScreenTrapPreset={setScreenTrapPreset} embroideryDefaults={embroideryDefaults} setEmbroideryDefaults={setEmbroideryDefaults} gang={{copies:gangCopies,width:gangWidth,height:gangHeight,fillSheet:gangFillSheet,gap:gangGap,setCopies:setGangCopies,setWidth:setGangWidth,setHeight:setGangHeight,setFillSheet:setGangFillSheet,setGap:setGangGap}}/>
         <div className="layers"><div><strong>Layers</strong><span>{active.length}</span></div>{[...active].reverse().map((e)=><button key={e.id} className={selected===e.id?"active":""} onClick={()=>setSelected(e.id)}><span>{e.type === "text" ? "T" : "▧"}</span>{e.type === "text" ? e.value : "Uploaded artwork"}</button>)}</div>
       </aside>
       </>}
@@ -537,6 +542,7 @@ type MethodSettingsProps={
   iccCombinations:{id:string;label:string;sourceProfile:string;destinationProfile:string}[];
   mirrorVinyl:boolean;setMirrorVinyl:(value:boolean)=>void;
   vinylMaterialClass:VinylMaterialClass;setVinylMaterialClass:(value:VinylMaterialClass)=>void;
+  advancedVectorize:boolean;setAdvancedVectorize:(value:boolean)=>void;
   dtfTrapPreset:string;setDtfTrapPreset:(value:string)=>void;
   dtfUnderbaseSpread:number;setDtfUnderbaseSpread:(value:number)=>void;
   screenLpi:number;setScreenLpi:(value:number)=>void;
@@ -546,7 +552,7 @@ type MethodSettingsProps={
   setEmbroideryDefaults:(value:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass})=>void;
   gang:{copies:number;width:number;height:number;fillSheet:boolean;gap:number;setCopies:(value:number)=>void;setWidth:(value:number)=>void;setHeight:(value:number)=>void;setFillSheet:(value:boolean)=>void;setGap:(value:number)=>void};
 };
-function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,vinylMaterialClass,setVinylMaterialClass,dtfTrapPreset,setDtfTrapPreset,dtfUnderbaseSpread,setDtfUnderbaseSpread,screenLpi,setScreenLpi,screenMode,setScreenMode,screenTrapPreset,setScreenTrapPreset,embroideryDefaults,setEmbroideryDefaults,gang}:MethodSettingsProps){
+function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,vinylMaterialClass,setVinylMaterialClass,advancedVectorize,setAdvancedVectorize,dtfTrapPreset,setDtfTrapPreset,dtfUnderbaseSpread,setDtfUnderbaseSpread,screenLpi,setScreenLpi,screenMode,setScreenMode,screenTrapPreset,setScreenTrapPreset,embroideryDefaults,setEmbroideryDefaults,gang}:MethodSettingsProps){
   const key=method.toLowerCase();
   const sheetPresets=[{id:"a4",label:"A4",w:210,h:297},{id:"letter",label:"Letter",w:216,h:279},{id:"dtf-30x40",label:"DTF 30×40",w:300,h:400},{id:"a3",label:"A3",w:297,h:420}];
   const dtfPresets=[{id:"dtf-pet-film-standard",label:"PET film · standard"},{id:"dtf-pet-film-fine",label:"PET film · fine detail"},{id:"dtf-dark-garment-heavy",label:"Dark garment · heavy"}];
@@ -571,17 +577,21 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
       <label>Material class<select value={vinylMaterialClass} onChange={e=>{const next=e.target.value as VinylMaterialClass;setVinylMaterialClass(next);setMirrorVinyl(vinylMirrorDefault(next))}}><option value="htv-smooth">HTV smooth (EasyWeed-class)</option><option value="htv-flock">HTV flock</option><option value="htv-glitter">HTV glitter</option><option value="adhesive-permanent">Adhesive permanent (651)</option><option value="adhesive-removable">Adhesive removable (631)</option><option value="adhesive-glitter">Adhesive glitter (851)</option></select></label>
       <p className="hint" style={{marginTop:0}}>{vinylMaterialHint(vinylMaterialClass)}</p>
       <label className="check"><input type="checkbox" checked={mirrorVinyl} onChange={e=>setMirrorVinyl(e.target.checked)}/> Mirror for heat transfer (HTV)</label>
-      <p className="hint">Defaults from material class; override only when you intend a reverse-view application.</p>
+      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> Advanced vectorize (ML)</label>
+      <p className="hint">Image layers always Potrace on the server. This toggles optional ML prep before trace. Text stays glyph-traced.</p>
     </>}
     {key.includes("screen")&&<>
       <label>Trap preset<select value={screenTrapPreset} onChange={e=>{const id=e.target.value;setScreenTrapPreset(id);if(id.includes("55"))setScreenLpi(55);else if(id.includes("45"))setScreenLpi(45)}}>{screenPresets.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
       <AdjustField label="LPI" value={screenLpi} min={20} max={85} step={1} onChange={setScreenLpi} presets={[{label:"35",value:35},{label:"45",value:45},{label:"55",value:55},{label:"65",value:65}]}/>
       <label>Screening<select value={screenMode} onChange={e=>setScreenMode(e.target.value as"am"|"fm")}><option value="am">AM (dot)</option><option value="fm">FM (stochastic)</option></select></label>
-      <p className="hint">Used for screen pack ZIP and halftone processors on export.</p>
+      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> Advanced vectorize (ML)</label>
+      <p className="hint">Image layers always Potrace on the server; this toggles optional ML prep. Used for screen pack ZIP and halftone processors on export.</p>
     </>}
     {key==="embroidery"&&<>
       <label>Fabric class<select value={embroideryDefaults.fabricClass} onChange={e=>{const fabricClass=e.target.value as EmbroideryFabricClass;const density=fabricDensity(fabricClass);setEmbroideryDefaults({...embroideryDefaults,fabricClass,spacing:density})}}><option value="woven">Stable woven</option><option value="tshirt">T-shirt knit</option><option value="pique">Pique polo</option><option value="fleece">Fleece / jumper</option><option value="performance-knit">Performance knit</option></select></label>
       <p className="hint" style={{marginTop:0}}>Sets density / underlay defaults and review scoring. Sew-out still required.</p>
+      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> Advanced vectorize (ML)</label>
+      <p className="hint" style={{marginTop:0}}>Image layers always Potrace on the server; this toggles optional ML prep. Editable text stays glyph-traced.</p>
       <p className="hint" style={{marginTop:0}}>Stitch family</p>
       <div className="segmented">{([["auto","Auto"],["satin","Satin"],["tatami","Tatami"],["running","Run"]] as const).map(([id,label])=><button key={id} type="button" className={(embroideryDefaults.kind??"auto")===id?"active":""} onClick={()=>setEmbroideryDefaults({...embroideryDefaults,kind:id})}>{label}</button>)}</div>
       <AdjustField label="Density / row spacing" value={embroideryDefaults.spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>setEmbroideryDefaults({...embroideryDefaults,spacing:v})} meta={densityLabel(embroideryDefaults.spacing)}/>

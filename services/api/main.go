@@ -144,6 +144,7 @@ func main() {
 	mux.Handle("POST /v1/production/gang/render", api.auth(productionGangRenderHandler(api)))
 	mux.Handle("POST /v1/production/vector/boolean", api.auth(productionBooleanHandler()))
 	mux.Handle("POST /v1/production/vector/offset", api.auth(productionOffsetHandler()))
+	mux.Handle("POST /v1/production/vectorize", api.auth(api.requireNotViewer(productionVectorizeHandler(api))))
 	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: requestLog(cors(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second}
 	go func() {
 		log.Printf("PrintStudio API %s", server.Addr)

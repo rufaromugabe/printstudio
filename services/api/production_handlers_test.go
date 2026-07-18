@@ -3,12 +3,14 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -165,5 +167,58 @@ func TestProductionGangRenderHandler(t *testing.T) {
 	}
 	if img.Bounds().Dx() != 79 || img.Bounds().Dy() != 79 || res.Header().Get("X-PrintStudio-Placement-Count") != "2" {
 		t.Fatal("unexpected server gang-sheet output")
+	}
+}
+
+func vectorizeFixturePNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, 48, 48))
+	for y := 8; y < 40; y++ {
+		for x := 8; x < 40; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{R: 10, G: 20, B: 30, A: 255})
+		}
+	}
+	var data bytes.Buffer
+	if err := png.Encode(&data, img); err != nil {
+		t.Fatal(err)
+	}
+	return data.Bytes()
+}
+
+func TestProductionVectorizeHandlerPNG(t *testing.T) {
+	if _, err := exec.LookPath("potrace"); err != nil {
+		t.Skip("potrace not installed")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/production/vectorize?method=vinyl&mlPrep=false", bytes.NewReader(vectorizeFixturePNG(t)))
+	req.Header.Set("Content-Type", "image/png")
+	res := httptest.NewRecorder()
+	productionVectorizeHandler(nil)(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", res.Code, res.Body.String())
+	}
+	var out struct {
+		SourceHash string `json:"sourceHash"`
+		PathCount  int    `json:"pathCount"`
+		Tracer     string `json:"tracer"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.SourceHash == "" || out.PathCount < 1 || out.Tracer == "" {
+		t.Fatalf("unexpected vectorize response: %+v", out)
+	}
+}
+
+func TestProductionVectorizeHandlerJSONBase64(t *testing.T) {
+	if _, err := exec.LookPath("potrace"); err != nil {
+		t.Skip("potrace not installed")
+	}
+	payload := `{"method":"embroidery","mlPrep":false,"imageBase64":"` + base64.StdEncoding.EncodeToString(vectorizeFixturePNG(t)) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/production/vectorize", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	productionVectorizeHandler(nil)(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", res.Code, res.Body.String())
 	}
 }

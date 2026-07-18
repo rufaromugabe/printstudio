@@ -69,6 +69,10 @@ libvips is used because it provides streaming, low-memory image processing and w
 
 The adapter accepts PBM input and produces SVG using Potrace. Set `POTRACE_BIN` when the executable is not on the service path. The engine reports vector tracing as unavailable if the binary cannot be resolved.
 
+### Advanced vectorize (ML prep → Potrace → Clipper)
+
+`POST /v1/production/vectorize` runs the production contour stage for image layers: optional AI prep, alpha→PBM, Potrace, SVG ring parse, Clipper2 cleanup, and quality gates. See [VECTORIZE_ENGINE.md](VECTORIZE_ENGINE.md). Vinyl, embroidery, and screen compilers consume the resulting `VectorContourSet` rings; they do not change how stitches or cuts are calculated.
+
 ### Polygon Boolean operations
 
 The API has an optional native Clipper2 backend through `github.com/epit3d/goclipper2`, pinned to `v0.0.9`. It provides fixed-point polygon union, difference, intersection, XOR and closed-polygon offsets. Coordinates are quantized to one-micron integer units and converted back to millimetres.
@@ -97,6 +101,7 @@ POST /v1/production/gang/nest
 POST /v1/production/gang/render
 POST /v1/production/vector/boolean
 POST /v1/production/vector/offset
+POST /v1/production/vectorize
 ```
 
 Raster requests accept PNG or JPEG bodies up to 50 MB and reject decoded images above 100 megapixels.

@@ -37,6 +37,27 @@ export type VinylReview={score:number;decision:"auto"|"semi-auto"|"human"|"block
 export type VinylReviewResult={profile:VinylMaterialProfile;diagnostics:VinylDiagnostic[];review:VinylReview;mirrorRecommended:boolean};
 export type PolygonPoint={x:number;y:number};
 export type PolygonPaths=PolygonPoint[][];
+export type VectorPoint={x:number;y:number};
+export type VectorDiagnostic={severity:"error"|"warning";code:string;message:string};
+export type VectorContourSet={
+  rings:VectorPoint[][];
+  sourceHash:string;
+  tracer:"potrace"|"ml-assisted"|string;
+  widthPx:number;
+  heightPx:number;
+  pathCount:number;
+  minFeatureMm:number;
+  units:"px"|"mm"|string;
+  diagnostics?:VectorDiagnostic[];
+};
+export type VectorizePlacement={
+  canvasWidth:number;
+  canvasHeight:number;
+  physicalWidthMm:number;
+  physicalHeightMm:number;
+  x:number;y:number;w:number;h:number;
+  rotation:number;
+};
 const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -139,6 +160,20 @@ export const api = {
   approveProductionProof:(id:string)=>request<{id:string;status:string;frozen:boolean}>(`/v1/production/proofs/${id}/approve`,{method:"POST",body:"{}"}),
   productionBoolean:(subject:PolygonPaths,clip:PolygonPaths,operation:"union"|"difference"|"intersection"|"xor")=>request<{paths:PolygonPaths}>("/v1/production/vector/boolean",{method:"POST",body:JSON.stringify({subject,clip,operation})}),
   productionOffset:(paths:PolygonPaths,deltaMm:number,join:"round"|"square"|"miter"="round",miterLimit=2)=>request<{paths:PolygonPaths}>("/v1/production/vector/offset",{method:"POST",body:JSON.stringify({paths,deltaMm,join,miterLimit})}),
+  productionVectorize:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;assetId?:string}):Promise<VectorContourSet>=>{
+    if(options.assetId){
+      return request<VectorContourSet>("/v1/production/vectorize",{method:"POST",body:JSON.stringify({assetId:options.assetId,method:options.method??"vinyl",mlPrep:!!options.mlPrep,alphaCutoff:options.alphaCutoff,placement:options.placement})});
+    }
+    const query=new URLSearchParams({method:options.method??"vinyl",mlPrep:options.mlPrep?"true":"false"});
+    if(options.alphaCutoff!=null)query.set("alphaCutoff",String(options.alphaCutoff));
+    const headers:Record<string,string>={"Content-Type":artwork.type||"image/png"};
+    if(options.placement)headers["X-PrintStudio-Placement"]=JSON.stringify(options.placement);
+    const response=await fetch(`${base}/v1/production/vectorize?${query}`,{method:"POST",credentials:"include",headers:{...authHeaders(headers)},body:artwork});
+    if(response.status===401){handleUnauthorized();const body=await response.json().catch(()=>({}));throw new Error(body.message??"Session expired — sign in again")}
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(body.message??body.error??`Vectorize failed (${response.status})`);
+    return body as VectorContourSet;
+  },
   productionSpotMatch:(colors:string[],maxDeltaE=6)=>request<{matches:{ink:{id:string;name:string;hex:string;family:string};deltaE00:number;exact:boolean}[];library:string}>("/v1/production/spot/match",{method:"POST",body:JSON.stringify({colors,maxDeltaE})}),
   productionAngleCheck:(angles:{cyan:number;magenta:number;yellow:number;black:number})=>request<{ok:boolean;conflicts:{channelA:string;channelB:string;deltaDegrees:number;severity:string;message:string}[]}>("/v1/production/screen/angles",{method:"POST",body:JSON.stringify(angles)}),
   productionDTFPack:(artwork:Blob,options:{name:string;widthMm:number;heightMm:number;dpi?:number;spread?:number;threshold?:number;trapPreset?:string;proofId?:string})=>{const query=new URLSearchParams({name:options.name,widthMm:String(options.widthMm),heightMm:String(options.heightMm),dpi:String(options.dpi??300),spread:String(options.spread??2),threshold:String(options.threshold??1)});if(options.trapPreset)query.set("trapPreset",options.trapPreset);if(options.proofId)query.set("proofId",options.proofId);return requestBlob(`/v1/production/dtf/pack?${query}`,artwork)},
