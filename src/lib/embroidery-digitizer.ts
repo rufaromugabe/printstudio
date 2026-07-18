@@ -8,11 +8,11 @@ export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLa
 const MAX_IMAGE_THREADS=8;
 const ALPHA_CUTOFF=32;
 
-export async function digitizeElements(elements:DigitizerElement[],view:DigitizerView,options?:{threadBrand?:ThreadBrand}):Promise<Digitization>{
-  const regions:EmbroideryRegion[]=[],failures:string[]=[],threadLabels:Record<string,string>={},brand=options?.threadBrand??"none";
+export async function digitizeElements(elements:DigitizerElement[],view:DigitizerView,options?:{threadBrand?:ThreadBrand;mode?:"color"|"silhouette"}):Promise<Digitization>{
+  const regions:EmbroideryRegion[]=[],failures:string[]=[],threadLabels:Record<string,string>={},brand=options?.threadBrand??"none",mode=options?.mode??"color";
   for(const element of elements){
     try{
-      const layers=await extractColorLayers(element);
+      const layers=await extractColorLayers(element,mode);
       if(!layers.length){failures.push(element.id);continue}
       for(const [layerIndex,layer] of layers.entries()){
         const matched=nearestThread(layer.threadId,brand);
@@ -46,7 +46,7 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
 
 type ColorLayer={threadId:string;rings:EmbroideryPoint[][]};
 
-async function extractColorLayers(element:DigitizerElement):Promise<ColorLayer[]>{
+async function extractColorLayers(element:DigitizerElement,mode:"color"|"silhouette"="color"):Promise<ColorLayer[]>{
   const scale=Math.min(4,Math.max(1,800/Math.max(element.w,element.h)));
   const width=Math.max(2,Math.ceil(element.w*scale));
   const height=Math.max(2,Math.ceil(element.h*scale));
@@ -63,8 +63,8 @@ async function extractColorLayers(element:DigitizerElement):Promise<ColorLayer[]
   }
   const data=ctx.getImageData(0,0,width,height).data;
 
-  // Explicit layer colour forces a single thread (text, or image override).
-  if(element.type==="text"||element.color){
+  // Vinyl / single-colour cuts need the opaque silhouette, not anti-aliased edge colours.
+  if(mode==="silhouette"||element.type==="text"||element.color){
     const mask=new Uint8Array(width*height);
     for(let i=0;i<mask.length;i++)mask[i]=data[i*4+3]>=ALPHA_CUTOFF?1:0;
     const rings=traceMask(mask,width,height).map(r=>simplify(r.map(p=>({x:p.x/scale,y:p.y/scale})),.35));

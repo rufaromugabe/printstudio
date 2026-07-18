@@ -42,19 +42,20 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     if(cropToContent)warnings.push(`Sized to inked artwork (${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm), not the full print area.`);
     return{method,blob:rendered.blob,fileName:`${clean}-${method.toLowerCase().replace(" ","-")}-300dpi.png`,mime:"image/png",previewUrl:URL.createObjectURL(rendered.blob),summary:`Server ${pixelWidth} × ${pixelHeight}px at 300 DPI · ${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm${bleed?` with ${bleed} mm bleed`:""}`,warnings,widthMM,heightMM,pixelWidth,pixelHeight,sha256:rendered.sha256,renderer:"server"};
   }
-  const traced=await digitizeElements(elements,view);
+  const traced=await digitizeElements(elements,view,method==="Vinyl"?{mode:"silhouette"}:undefined);
   if(method==="Vinyl"){
     if(!capabilities?.polygonBoolean)throw new Error("Vinyl cut paths require the Clipper2 production backend. Rebuild/deploy the API with -tags clipper2 — approximate contour exports are disabled.");
+    const exteriorCount=traced.regions.length;
     const cleaned=await cleanVinylPaths(traced.regions.map(r=>r.geometry.rings),view);
     const tiny=cleaned.filter(path=>{const xs=path.map(p=>p.x),ys=path.map(p=>p.y);return Math.min(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys))<1}).length;
     if(tiny)warnings.push(`${tiny} contour(s) contain details under 1 mm that may weed poorly.`);
-    const holeCount=Math.max(0,cleaned.length-traced.regions.length);
+    const holeCount=Math.max(0,cleaned.length-exteriorCount);
     if(holeCount>0)warnings.push(`Kept ${holeCount} interior cutout(s) for weeding.`);
     const framed=framePathsToContent(cleaned,CONTENT_MARGIN_MM);
     const compound=framed.paths.map(path=>pathToSVG(path)).join("");
     const transform=mirrorVinyl?`translate(${framed.widthMM} 0) scale(-1 1)`:"";
     const weed=`<rect id="weed-box" x="0.5" y="0.5" width="${Math.max(0,framed.widthMM-1)}" height="${Math.max(0,framed.heightMM-1)}" fill="none" stroke="#000" stroke-width="0.15"/>`;
-    const svg=svgEnvelope(framed.widthMM,framed.heightMM,`<g transform="${transform}"><path d="${compound}" fill="#111111" fill-opacity="0.16" stroke="#000" stroke-width="0.15" fill-rule="evenodd"/></g>${weed}`);
+    const svg=svgEnvelope(framed.widthMM,framed.heightMM,`<g transform="${transform}"><path d="${compound}" fill="#111111" fill-opacity="0.55" stroke="#000" stroke-width="0.12" fill-rule="evenodd"/></g>${weed}`);
     const blob=new Blob([svg],{type:"image/svg+xml"});
     const sha256=await hashBlob(blob);
     warnings.push(`Sized to cut contours (${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm), not the full print area.`);
@@ -88,27 +89,37 @@ async function cleanVinylPaths(ringsList:{x:number;y:number}[][][],view:Digitize
     .filter(rings=>rings.length>0&&rings[0].length>=3);
   if(!polygons.length)throw new Error("No vinyl contours were produced.");
 
-  // Carve holes with difference first. A flat union of every ring fills interiors
-  // and leaves only the outer silhouette — wrong for vinyl stencils.
-  const solids:PolygonPaths=[];
+  // Keep each letter/logo as one path set (outer + holes). Flattening holes into the
+  // union list used to treat cutouts as solid fills, so only outer outlines survived.
+  const shapes:PolygonPaths[]=[];
   for(const rings of polygons){
-    let paths:PolygonPaths=[rings[0]];
+    let shape:PolygonPaths=[orientRing(rings[0],true)];
     for(let i=1;i<rings.length;i++){
       if(rings[i].length<3)continue;
-      const cut=await api.productionBoolean(paths,[rings[i]],"difference");
-      paths=cut.paths;
+      const cut=await api.productionBoolean(shape,[orientRing(rings[i],false)],"difference");
+      shape=cut.paths.length?cut.paths:shape;
     }
-    solids.push(...paths);
+    if(shape.length)shapes.push(shape);
   }
-  if(!solids.length)throw new Error("No vinyl contours were produced.");
+  if(!shapes.length)throw new Error("No vinyl contours were produced.");
 
-  let merged:PolygonPaths=[solids[0]];
-  for(let i=1;i<solids.length;i++){
-    const result=await api.productionBoolean(merged,[solids[i]],"union");
-    merged=result.paths;
+  let merged:PolygonPaths=shapes[0];
+  for(let i=1;i<shapes.length;i++){
+    const result=await api.productionBoolean(merged,shapes[i],"union");
+    merged=result.paths.length?result.paths:merged.concat(shapes[i]);
   }
   const normalized=await api.productionOffset(merged,0,"round");
   return normalized.paths.length?normalized.paths:merged;
+}
+
+function orientRing(ring:{x:number;y:number}[],wantPositiveArea:boolean){
+  let area=0;
+  for(let i=0;i<ring.length;i++){
+    const p=ring[i],q=ring[(i+1)%ring.length];
+    area+=p.x*q.y-q.x*p.y;
+  }
+  const positive=area>=0;
+  return positive===wantPositiveArea?ring:ring.slice().reverse();
 }
 
 export function framePathsToContent(paths:{x:number;y:number}[][],marginMM=CONTENT_MARGIN_MM){
