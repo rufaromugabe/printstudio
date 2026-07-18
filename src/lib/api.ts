@@ -25,9 +25,16 @@ export type ProductionMetrics = {
 };
 export type EmbroideryPoint={x:number;y:number};
 export type EmbroideryRegion={id:string;threadId:string;geometry:{rings:EmbroideryPoint[][]};kind:"running"|"tatami"|"satin";spacingMm?:number;stitchLengthMm?:number;angleDegrees?:number;widthMm?:number;edgeUnderlay?:boolean;centerUnderlay?:boolean;zigzagUnderlay?:boolean};
-export type EmbroideryRequest={name:string;regions:EmbroideryRegion[];machine:{id:string;name:string;hoopWidthMm:number;hoopHeightMm:number;maxStitches:number;maxColors:number;minStitchMm:number;maxStitchMm:number;maxJumpMm:number}};
+export type EmbroideryFabricClass="woven"|"tshirt"|"pique"|"fleece"|"performance-knit";
+export type EmbroideryRequest={name:string;fabricClass?:EmbroideryFabricClass;regions:EmbroideryRegion[];machine:{id:string;name:string;hoopWidthMm:number;hoopHeightMm:number;maxStitches:number;maxColors:number;minStitchMm:number;maxStitchMm:number;maxJumpMm:number}};
 export type EmbroideryDiagnostic={severity:"error"|"warning";code:string;message:string;regionId:string};
-export type EmbroideryCompilation={document:{sourceHash:string;compilerVersion:string;diagnostics:EmbroideryDiagnostic[];plan:{underlay:unknown[];stitches:unknown[];bounds?:{minX:number;minY:number;maxX:number;maxY:number}}[]};svg:string};
+export type EmbroideryReview={score:number;decision:"auto"|"semi-auto"|"human"|"blocked";summary:string;factors:{code:string;label:string;points:number}[];fabric:{class:string;label:string;densityMm:number;pullCompensationMm:number;notes:string};hardStops?:string[]};
+export type EmbroideryCompilation={document:{sourceHash:string;compilerVersion:string;diagnostics:EmbroideryDiagnostic[];fabric?:EmbroideryReview["fabric"];review?:EmbroideryReview;plan:{underlay:unknown[];stitches:unknown[];bounds?:{minX:number;minY:number;maxX:number;maxY:number}}[]};svg:string};
+export type VinylMaterialClass="htv-smooth"|"htv-flock"|"htv-glitter"|"adhesive-permanent"|"adhesive-removable"|"adhesive-glitter";
+export type VinylDiagnostic={severity:"error"|"warning";code:string;message:string;pathId?:string};
+export type VinylMaterialProfile={class:VinylMaterialClass|string;label:string;family:string;mirrorDefault:boolean;warnFeatureMm:number;rejectFeatureMm:number;notes:string};
+export type VinylReview={score:number;decision:"auto"|"semi-auto"|"human"|"blocked";summary:string;factors:{code:string;label:string;points:number}[];material:VinylMaterialProfile;hardStops?:string[]};
+export type VinylReviewResult={profile:VinylMaterialProfile;diagnostics:VinylDiagnostic[];review:VinylReview;mirrorRecommended:boolean};
 export type PolygonPoint={x:number;y:number};
 export type PolygonPaths=PolygonPoint[][];
 const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
@@ -109,6 +116,7 @@ export const api = {
   },
   assetURL: (id:string) => request<{url:string;expiresIn:number}>(`/v1/assets/${id}/url`),
   compileEmbroidery:(input:EmbroideryRequest)=>request<EmbroideryCompilation>("/v1/embroidery/compile",{method:"POST",body:JSON.stringify(input)}),
+  vinylReview:(input:{materialClass:VinylMaterialClass|string;paths:PolygonPaths;mirrored?:boolean})=>request<VinylReviewResult>("/v1/vinyl/review",{method:"POST",body:JSON.stringify(input)}),
   exportEmbroidery:async(input:EmbroideryRequest)=>{
     const response=await fetch(`${base}/v1/embroidery/export/dst`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify(input)});
     if(response.status===401){handleUnauthorized();const body=await response.json().catch(()=>({}));throw new Error(body.message??"Session expired — sign in again")}

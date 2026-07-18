@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element -- previews use generated blob URLs and signed uploads. */
 
 import { ChangeEvent, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
-import { api, Asset, EmbroideryCompilation, EmbroideryRequest, Product, ProductView } from "@/lib/api";
+import { api, Asset, EmbroideryCompilation, EmbroideryFabricClass, EmbroideryRequest, Product, ProductView, VinylMaterialClass } from "@/lib/api";
 import { AdminPanel } from "@/components/admin-panel";
 import { GoogleLogin } from "@/components/google-login";
 import { fetchSessionUser, getSessionUser, hasSession, isAdminRole, logoutSession, SessionUser } from "@/lib/auth";
@@ -73,6 +73,7 @@ export default function Home() {
   const [productionState,setProductionState]=useState<"idle"|"preparing"|"error">("idle");
   const [productionError,setProductionError]=useState("");
   const [mirrorVinyl,setMirrorVinyl]=useState(true);
+  const [vinylMaterialClass,setVinylMaterialClass]=useState<VinylMaterialClass>("htv-smooth");
   const [exportHistory,setExportHistory]=useState<ExportRecord[]>([]);
   const [formatState,setFormatState]=useState("");
   const [gangCopies,setGangCopies]=useState(2);
@@ -85,7 +86,7 @@ export default function Home() {
   const [screenLpi,setScreenLpi]=useState(45);
   const [screenMode,setScreenMode]=useState<"am"|"fm">("am");
   const [screenTrapPreset,setScreenTrapPreset]=useState("screen-plastisol-45lpi");
-  const [embroideryDefaults,setEmbroideryDefaults]=useState<{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand}>({kind:"auto",spacing:.45,angle:0,underlay:"auto",stitchLength:3,threadBrand:"none"});
+  const [embroideryDefaults,setEmbroideryDefaults]=useState<{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass}>({kind:"auto",spacing:.4,angle:0,underlay:"auto",stitchLength:3,threadBrand:"none",fabricClass:"tshirt"});
   const [threadLabels,setThreadLabels]=useState<Record<string,string>>({});
   const [proofId,setProofId]=useState("");
   const [proofState,setProofState]=useState<"none"|"pending"|"approved">("none");
@@ -295,14 +296,14 @@ export default function Home() {
     }));
     const result=await digitizeElements(refreshed,currentView,{threadBrand:embroideryDefaults.threadBrand});
     setThreadLabels(result.threadLabels);
-    const request:EmbroideryRequest={name:design.name,regions:result.regions,machine:{id:"generic-130x180",name:"Generic 130 x 180 mm",hoopWidthMm:130,hoopHeightMm:180,maxStitches:100000,maxColors:16,minStitchMm:.4,maxStitchMm:12.1,maxJumpMm:12.1}};
+    const request:EmbroideryRequest={name:design.name,fabricClass:embroideryDefaults.fabricClass,regions:result.regions,machine:{id:"generic-130x180",name:"Generic 130 x 180 mm",hoopWidthMm:130,hoopHeightMm:180,maxStitches:100000,maxColors:16,minStitchMm:.4,maxStitchMm:12.1,maxJumpMm:12.1}};
     embroideryRequestRef.current=request;
     return request;
   };
   const openEmbroidery=async()=>{if(design.method.toLowerCase()!=="embroidery"){setEmbroideryError("Select Embroidery as the decoration method first.");setEmbroidery(null);return}if(!active.length){setEmbroideryError("Add at least one design element before compiling.");setEmbroidery(null);return}setEmbroideryState("compiling");setEmbroideryError("");try{setEmbroidery(await api.compileEmbroidery(await embroideryRequest()));setEmbroideryState("idle")}catch(error){embroideryRequestRef.current=null;setEmbroideryError(error instanceof Error?error.message:"Compilation failed");setEmbroideryState("error")}};
   const downloadEmbroidery=async()=>{setEmbroideryState("exporting");try{const request=embroideryRequestRef.current??await embroideryRequest();const blob=await api.exportEmbroidery(request);const url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download=`${design.name.replace(/[^a-z0-9_-]+/gi,"-")||"printstudio-design"}.dst`;link.click();URL.revokeObjectURL(url);setEmbroideryState("idle")}catch(error){setEmbroideryError(error instanceof Error?error.message:"Export failed");setEmbroideryState("error")}};
   const productionMethod=():ProductionMethod|null=>{const method=design.method.toLowerCase();if(method==="dtf")return"DTF";if(method.includes("vinyl"))return"Vinyl";if(method.includes("screen"))return"Screen print";if(method.includes("sublimation"))return"Sublimation";return null};
-  const prepareProduction=async(mirror=mirrorVinyl)=>{const method=productionMethod();if(!method){setProductionError(`${design.method} production export is not implemented yet.`);return}setProductionState("preparing");setProductionError("");setProofId("");setProofState("none");if(production)URL.revokeObjectURL(production.previewUrl);try{setProduction(await prepareProductionExport(method,design.name,active,currentView,mirror));setProductionState("idle")}catch(error){setProduction(null);setProductionError(error instanceof Error?error.message:"Production export failed");setProductionState("error")}};
+  const prepareProduction=async(mirror=mirrorVinyl)=>{const method=productionMethod();if(!method){setProductionError(`${design.method} production export is not implemented yet.`);return}setProductionState("preparing");setProductionError("");setProofId("");setProofState("none");if(production)URL.revokeObjectURL(production.previewUrl);try{setProduction(await prepareProductionExport(method,design.name,active,currentView,method==="Vinyl"?{mirror,materialClass:vinylMaterialClass}:mirror));setProductionState("idle")}catch(error){setProduction(null);setProductionError(error instanceof Error?error.message:"Production export failed");setProductionState("error")}};
   const exportDesign=()=>{if(design.method.toLowerCase()==="embroidery")void openEmbroidery();else void prepareProduction()};
   const embroideryStitchFieldMM=(()=>{
     if(!embroidery?.document.plan.length)return "";
@@ -313,7 +314,7 @@ export default function Home() {
   })();
   const closeProduction=()=>{if(production)URL.revokeObjectURL(production.previewUrl);setProduction(null);setProductionError("");setProductionState("idle");setProofId("");setProofState("none")};
   const downloadBlob=async(blob:Blob,fileName:string)=>{if(!production)return;const url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download=fileName;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);await recordArtifact(production,blob,fileName);setExportHistory(await listArtifacts())};
-  const downloadProduction=()=>{if(production)void downloadBlob(production.blob,production.fileName)};
+  const downloadProduction=()=>{if(!production)return;if(production.vinylBlocked){setProductionError("Vinyl hard stops block cut SVG download — enlarge detail or change material class.");return}void downloadBlob(production.blob,production.fileName)};
   const ensureApprovedProof=async():Promise<string>=>{
     if(proofState==="approved"&&proofId)return proofId;
     if(!production)throw new Error("Prepare a production preview first.");
@@ -397,14 +398,14 @@ export default function Home() {
           {design.method.toLowerCase()==="embroidery"&&<EmbroideryControls element={selectedElement} onChange={patch=>patchElement(selectedElement.id,patch)}/>} 
           <button className="delete" onClick={remove}>Delete element</button>
         </> : <div className="empty-prop"><span>✓</span><strong>{warnings ? `${warnings} placement warning${warnings>1?"s":""}` : "Ready to print"}</strong><p>Select an element to edit its size, content and colour.</p></div>}
-        <MethodSettings method={design.method} iccCombo={iccCombo} setIccCombo={setIccCombo} iccCombinations={iccCombinations} mirrorVinyl={mirrorVinyl} setMirrorVinyl={setMirrorVinyl} dtfTrapPreset={dtfTrapPreset} setDtfTrapPreset={setDtfTrapPreset} dtfUnderbaseSpread={dtfUnderbaseSpread} setDtfUnderbaseSpread={setDtfUnderbaseSpread} screenLpi={screenLpi} setScreenLpi={setScreenLpi} screenMode={screenMode} setScreenMode={setScreenMode} screenTrapPreset={screenTrapPreset} setScreenTrapPreset={setScreenTrapPreset} embroideryDefaults={embroideryDefaults} setEmbroideryDefaults={setEmbroideryDefaults} gang={{copies:gangCopies,width:gangWidth,height:gangHeight,fillSheet:gangFillSheet,gap:gangGap,setCopies:setGangCopies,setWidth:setGangWidth,setHeight:setGangHeight,setFillSheet:setGangFillSheet,setGap:setGangGap}}/>
+        <MethodSettings method={design.method} iccCombo={iccCombo} setIccCombo={setIccCombo} iccCombinations={iccCombinations} mirrorVinyl={mirrorVinyl} setMirrorVinyl={setMirrorVinyl} vinylMaterialClass={vinylMaterialClass} setVinylMaterialClass={setVinylMaterialClass} dtfTrapPreset={dtfTrapPreset} setDtfTrapPreset={setDtfTrapPreset} dtfUnderbaseSpread={dtfUnderbaseSpread} setDtfUnderbaseSpread={setDtfUnderbaseSpread} screenLpi={screenLpi} setScreenLpi={setScreenLpi} screenMode={screenMode} setScreenMode={setScreenMode} screenTrapPreset={screenTrapPreset} setScreenTrapPreset={setScreenTrapPreset} embroideryDefaults={embroideryDefaults} setEmbroideryDefaults={setEmbroideryDefaults} gang={{copies:gangCopies,width:gangWidth,height:gangHeight,fillSheet:gangFillSheet,gap:gangGap,setCopies:setGangCopies,setWidth:setGangWidth,setHeight:setGangHeight,setFillSheet:setGangFillSheet,setGap:setGangGap}}/>
         <div className="layers"><div><strong>Layers</strong><span>{active.length}</span></div>{[...active].reverse().map((e)=><button key={e.id} className={selected===e.id?"active":""} onClick={()=>setSelected(e.id)}><span>{e.type === "text" ? "T" : "▧"}</span>{e.type === "text" ? e.value : "Uploaded artwork"}</button>)}</div>
       </aside>
       </>}
     </section>
     {bgPrompt&&<div className="embroidery-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget&&!bgPrompt.busy)keepBackground()}}><section className="bg-clean-dialog" role="dialog" aria-modal="true" aria-label="Remove background"><header><div><p className="eyebrow">ARTWORK</p><h2>Solid background detected</h2></div><button onClick={keepBackground} disabled={bgPrompt.busy} aria-label="Close">×</button></header><div className="bg-clean-body"><div className="bg-clean-preview"><img src={bgPrompt.previewUrl} alt="Uploaded artwork"/></div><p>This looks like a logo on a flat background. Remove it for cleaner print and embroidery, or keep the original.</p></div><footer><button className="button secondary" disabled={bgPrompt.busy} onClick={keepBackground}>Keep background</button><button className="button primary" disabled={bgPrompt.busy} onClick={()=>void removeBackground()}>{bgPrompt.busy?"Removing…":"Remove background"}</button></footer></section></div>}
-{(embroidery||embroideryError||embroideryState==="compiling")&&<div className="embroidery-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget){setEmbroidery(null);setEmbroideryError("")}}}><section className="embroidery-dialog" role="dialog" aria-modal="true" aria-label="Embroidery production preview"><header><div><p className="eyebrow">EMBROIDERY COMPILER</p><h2>Production stitch preview</h2></div><button onClick={()=>{setEmbroidery(null);setEmbroideryError("")}} aria-label="Close">×</button></header>{embroideryState==="compiling"?<div className="embroidery-loading">Tracing artwork and compiling stitch plan…</div>:embroideryError&&!embroidery?<div className="embroidery-failure"><strong>Cannot compile this design</strong><p>{embroideryError}</p></div>:embroidery&&<><div className="embroidery-layout"><div className="stitch-preview" dangerouslySetInnerHTML={{__html:embroidery.svg}}/><div className="embroidery-report"><strong>{embroidery.document.plan.reduce((n,b)=>n+b.underlay.length+b.stitches.length,0).toLocaleString()} commands</strong><small>{embroideryStitchFieldMM}Compiler {embroidery.document.compilerVersion}<br/>Source {embroidery.document.sourceHash.slice(0,12)}</small><p className="trace-note">Sized to traced artwork contours, not the full print area or hoop outline.</p>{Object.keys(threadLabels).length>0&&<div className="thread-legend">{Object.entries(threadLabels).map(([hex,label])=><span key={hex}><i style={{background:hex}}/>{label}</span>)}</div>}{embroidery.document.diagnostics.length?<ul>{[...embroidery.document.diagnostics].sort((a,b)=>Number(a.severity==="warning")-Number(b.severity==="warning")).map((d,i)=><li className={d.severity} key={`${d.code}-${d.regionId??""}-${i}`}><b>{d.code||d.severity.toUpperCase()}</b>{d.message||"Machine check warning"}{d.regionId?<span> · {d.regionId}</span>:null}</li>)}</ul>:<div className="embroidery-ok">✓ Machine-profile checks passed</div>}</div></div>{embroideryError&&<p className="inline-error">{embroideryError}</p>}<footer><button className="button secondary" onClick={()=>{setEmbroidery(null);setEmbroideryError("")}}>Close</button><button className="button primary" disabled={embroideryState==="exporting"||embroidery.document.diagnostics.some(d=>d.severity==="error")} onClick={downloadEmbroidery}>{embroideryState==="exporting"?"Preparing DST…":"Download DST"}</button></footer></>}</section></div>}
-    {(production||productionError||productionState==="preparing")&&<ProductionDialog production={production} state={productionState} error={productionError} method={design.method} iccCombo={iccCombo} setIccCombo={setIccCombo} iccCombinations={iccCombinations} mirrorVinyl={mirrorVinyl} setMirrorVinyl={setMirrorVinyl} prepareProduction={prepareProduction} close={closeProduction} download={downloadProduction} createAlternate={createAlternate} createAdvanced={createAdvanced} proofState={proofState} formatState={formatState} gang={{copies:gangCopies,width:gangWidth,height:gangHeight,fillSheet:gangFillSheet,gap:gangGap,setCopies:setGangCopies,setWidth:setGangWidth,setHeight:setGangHeight,setFillSheet:setGangFillSheet,setGap:setGangGap}} history={exportHistory} redownload={redownload}/>} 
+{(embroidery||embroideryError||embroideryState==="compiling")&&<div className="embroidery-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget){setEmbroidery(null);setEmbroideryError("")}}}><section className="embroidery-dialog" role="dialog" aria-modal="true" aria-label="Embroidery production preview"><header><div><p className="eyebrow">EMBROIDERY COMPILER</p><h2>Production stitch preview</h2></div><button onClick={()=>{setEmbroidery(null);setEmbroideryError("")}} aria-label="Close">×</button></header>{embroideryState==="compiling"?<div className="embroidery-loading">Tracing artwork and compiling stitch plan…</div>:embroideryError&&!embroidery?<div className="embroidery-failure"><strong>Cannot compile this design</strong><p>{embroideryError}</p></div>:embroidery&&<><div className="embroidery-layout"><div className="stitch-preview" dangerouslySetInnerHTML={{__html:embroidery.svg}}/><div className="embroidery-report"><strong>{embroidery.document.plan.reduce((n,b)=>n+b.underlay.length+b.stitches.length,0).toLocaleString()} commands</strong><small>{embroideryStitchFieldMM}Compiler {embroidery.document.compilerVersion}<br/>Source {embroidery.document.sourceHash.slice(0,12)}{embroidery.document.fabric?<> · {embroidery.document.fabric.label}</>:null}</small>{embroidery.document.review&&<div className={`review-card ${embroidery.document.review.decision}`}><strong>Review score {embroidery.document.review.score}</strong><p>{embroidery.document.review.summary}</p>{embroidery.document.review.fabric?.notes&&<small>{embroidery.document.review.fabric.notes}</small>}{embroidery.document.review.factors?.length>0&&<ul className="review-factors">{embroidery.document.review.factors.map(f=><li key={f.code}>{f.label} <span>+{f.points}</span></li>)}</ul>}</div>}<p className="trace-note">Fabric-class defaults, hard rejects, and human-digitizer scoring applied before DST export.</p>{Object.keys(threadLabels).length>0&&<div className="thread-legend">{Object.entries(threadLabels).map(([hex,label])=><span key={hex}><i style={{background:hex}}/>{label}</span>)}</div>}{embroidery.document.diagnostics.length?<ul>{[...embroidery.document.diagnostics].sort((a,b)=>Number(a.severity==="warning")-Number(b.severity==="warning")).map((d,i)=><li className={d.severity} key={`${d.code}-${d.regionId??""}-${i}`}><b>{d.code||d.severity.toUpperCase()}</b>{d.message||"Machine check warning"}{d.regionId?<span> · {d.regionId}</span>:null}</li>)}</ul>:<div className="embroidery-ok">✓ Machine-profile checks passed</div>}</div></div>{embroideryError&&<p className="inline-error">{embroideryError}</p>}<footer><button className="button secondary" onClick={()=>{setEmbroidery(null);setEmbroideryError("")}}>Close</button><button className="button primary" disabled={embroideryState==="exporting"||embroidery.document.diagnostics.some(d=>d.severity==="error")} onClick={downloadEmbroidery}>{embroideryState==="exporting"?"Preparing DST…":"Download DST"}</button></footer></>}</section></div>}
+    {(production||productionError||productionState==="preparing")&&<ProductionDialog production={production} state={productionState} error={productionError} method={design.method} iccCombo={iccCombo} setIccCombo={setIccCombo} iccCombinations={iccCombinations} mirrorVinyl={mirrorVinyl} setMirrorVinyl={setMirrorVinyl} vinylMaterialClass={vinylMaterialClass} prepareProduction={prepareProduction} close={closeProduction} download={downloadProduction} createAlternate={createAlternate} createAdvanced={createAdvanced} proofState={proofState} formatState={formatState} gang={{copies:gangCopies,width:gangWidth,height:gangHeight,fillSheet:gangFillSheet,gap:gangGap,setCopies:setGangCopies,setWidth:setGangWidth,setHeight:setGangHeight,setFillSheet:setGangFillSheet,setGap:setGangGap}} history={exportHistory} redownload={redownload}/>} 
   </main>;
 }
 
@@ -418,8 +419,8 @@ function chooseGangSheet(artW:number,artH:number,preferredW:number,preferredH:nu
   const fit=presets.find(p=>artworkFitsSheet(artW,artH,p.width,p.height));
   return fit??{width:Math.ceil(artW),height:Math.ceil(artH)};
 }
-type ProductionDialogProps={production:ProductionResult|null;state:"idle"|"preparing"|"error";error:string;method:string;iccCombo:string;setIccCombo:(value:string)=>void;iccCombinations:{id:string;label:string;sourceProfile:string;destinationProfile:string}[];mirrorVinyl:boolean;setMirrorVinyl:(value:boolean)=>void;prepareProduction:(mirror?:boolean)=>Promise<void>;close:()=>void;download:()=>void;createAlternate:(format:"pdf"|"tiff"|"zip"|"gang")=>Promise<void>;createAdvanced:(kind:"underbase"|"halftone"|"halftone-fm"|"cmyk")=>Promise<void>;proofState:"none"|"pending"|"approved";formatState:string;gang:{copies:number;width:number;height:number;fillSheet:boolean;gap:number;setCopies:(value:number)=>void;setWidth:(value:number)=>void;setHeight:(value:number)=>void;setFillSheet:(value:boolean)=>void;setGap:(value:number)=>void};history:ExportRecord[];redownload:(record:ExportRecord)=>Promise<void>};
-function ProductionDialog({production,state,error,method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,prepareProduction,close,download,createAlternate,createAdvanced,proofState,formatState,gang,history,redownload}:ProductionDialogProps){
+type ProductionDialogProps={production:ProductionResult|null;state:"idle"|"preparing"|"error";error:string;method:string;iccCombo:string;setIccCombo:(value:string)=>void;iccCombinations:{id:string;label:string;sourceProfile:string;destinationProfile:string}[];mirrorVinyl:boolean;setMirrorVinyl:(value:boolean)=>void;vinylMaterialClass:VinylMaterialClass;prepareProduction:(mirror?:boolean)=>Promise<void>;close:()=>void;download:()=>void;createAlternate:(format:"pdf"|"tiff"|"zip"|"gang")=>Promise<void>;createAdvanced:(kind:"underbase"|"halftone"|"halftone-fm"|"cmyk")=>Promise<void>;proofState:"none"|"pending"|"approved";formatState:string;gang:{copies:number;width:number;height:number;fillSheet:boolean;gap:number;setCopies:(value:number)=>void;setWidth:(value:number)=>void;setHeight:(value:number)=>void;setFillSheet:(value:boolean)=>void;setGap:(value:number)=>void};history:ExportRecord[];redownload:(record:ExportRecord)=>Promise<void>};
+function ProductionDialog({production,state,error,method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,vinylMaterialClass,prepareProduction,close,download,createAlternate,createAdvanced,proofState,formatState,gang,history,redownload}:ProductionDialogProps){
   const sheetPresets=[{id:"a4",label:"A4",w:210,h:297},{id:"letter",label:"Letter",w:216,h:279},{id:"dtf-30x40",label:"DTF 30×40",w:300,h:400},{id:"a3",label:"A3",w:297,h:420}];
   const [sheetPreviewUrl,setSheetPreviewUrl]=useState<string|null>(null);
   const [sheetPreviewState,setSheetPreviewState]=useState<"idle"|"loading"|"error">("idle");
@@ -500,7 +501,11 @@ function ProductionDialog({production,state,error,method,iccCombo,setIccCombo,ic
             {proofState==="approved"?<div className="embroidery-ok">✓ Production proof approved for this preview</div>:<p className="curve-hint">Packaging will reuse this artwork and approve the proof automatically when required — no extra approval step.</p>}
             <label className="full">Colour profile<select value={iccCombo} onChange={e=>setIccCombo(e.target.value)}>{iccCombinations.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
             <p className="curve-hint">Common working-space profiles only (sRGB, Display P3, Gray).</p>
-            {production.method==="Vinyl"&&<label className="mirror-option"><input type="checkbox" checked={mirrorVinyl} onChange={e=>{setMirrorVinyl(e.target.checked);void prepareProduction(e.target.checked)}}/> Mirror for heat transfer</label>}
+            {production.method==="Vinyl"&&<>
+              <p className="curve-hint">Material: {vinylMaterialClass} · thresholds applied server-side</p>
+              <label className="mirror-option"><input type="checkbox" checked={mirrorVinyl} onChange={e=>{setMirrorVinyl(e.target.checked);void prepareProduction(e.target.checked)}}/> Mirror for heat transfer</label>
+              {production.vinylReview&&<div className={`review-card ${production.vinylReview.decision}`}><strong>Review score {production.vinylReview.score}</strong><p>{production.vinylReview.summary}</p>{production.vinylReview.material?.notes&&<small>{production.vinylReview.material.notes}</small>}{production.vinylReview.factors?.length>0&&<ul className="review-factors">{production.vinylReview.factors.map(f=><li key={f.code}>{f.label} <span>+{f.points}</span></li>)}</ul>}</div>}
+            </>}
             {production.method==="DTF"&&<button className="processor-button" disabled={Boolean(formatState)} onClick={()=>void createAdvanced("underbase")}>Generate white underbase</button>}
             {production.method==="Screen print"&&<div className="screen-processors"><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("halftone")}>AM halftone</button><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("halftone-fm")}>FM stochastic</button><button disabled={Boolean(formatState)} onClick={()=>void createAdvanced("cmyk")}>CMYK preview</button></div>}
             {production.method!=="Vinyl"&&<div className="gang-controls">
@@ -514,13 +519,13 @@ function ProductionDialog({production,state,error,method,iccCombo,setIccCombo,ic
               {!gang.fillSheet&&<AdjustField label="Copies" value={gang.copies} min={1} max={500} step={1} onChange={gang.setCopies}/>}
               <button className="button primary" disabled={Boolean(formatState)||sheetPreviewState==="loading"} onClick={()=>void createAlternate("gang")}>{formatState==="gang"?"Building sheet…":gang.fillSheet?"Download filled sheet":`Download sheet × ${gang.copies}`}</button>
             </div>}
-            <div className="format-actions"><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("pdf")}>PDF</button><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("tiff")}>TIFF</button><button disabled={Boolean(formatState)} onClick={()=>void createAlternate("zip")}>{formatState==="zip"?"Packaging…":production.method==="DTF"?"DTF Pack ZIP":production.method==="Screen print"?"Screen Pack ZIP":production.method==="Sublimation"?"Sublimation Pack ZIP":"Package ZIP"}</button></div>
+            <div className="format-actions"><button disabled={Boolean(formatState)||Boolean(production.vinylBlocked)} onClick={()=>void createAlternate("pdf")}>PDF</button><button disabled={Boolean(formatState)||Boolean(production.vinylBlocked)} onClick={()=>void createAlternate("tiff")}>TIFF</button><button disabled={Boolean(formatState)||Boolean(production.vinylBlocked)} onClick={()=>void createAlternate("zip")}>{formatState==="zip"?"Packaging…":production.method==="DTF"?"DTF Pack ZIP":production.method==="Screen print"?"Screen Pack ZIP":production.method==="Sublimation"?"Sublimation Pack ZIP":"Package ZIP"}</button></div>
             {error&&<p className="inline-format-error">{error}</p>}
             {production.warnings.length?<ul>{production.warnings.map((warning,i)=><li key={i}>{warning}</li>)}</ul>:<div className="embroidery-ok">✓ Production checks passed</div>}
           </div>
         </div>
         {history.length>0&&<div className="export-history"><div><strong>Recent immutable exports</strong><small>Stored locally with SHA-256</small></div>{history.slice(0,5).map(record=><button key={record.id} onClick={()=>void redownload(record)}><span>{record.fileName}</span><small>{new Date(record.createdAt).toLocaleString()} · {record.sha256.slice(0,12)}</small></button>)}</div>}
-        <footer><button className="button secondary" onClick={close}>Close</button><button className="button primary" onClick={download}>Download {production.mime==="image/png"?"PNG":"SVG"}</button></footer>
+        <footer><button className="button secondary" onClick={close}>Close</button><button className="button primary" disabled={Boolean(production.vinylBlocked)} onClick={download} title={production.vinylBlocked?"Resolve vinyl hard stops before download":undefined}>Download {production.mime==="image/png"?"PNG":"SVG"}</button></footer>
       </>}
     </section>
   </div>;
@@ -531,16 +536,17 @@ type MethodSettingsProps={
   iccCombo:string;setIccCombo:(value:string)=>void;
   iccCombinations:{id:string;label:string;sourceProfile:string;destinationProfile:string}[];
   mirrorVinyl:boolean;setMirrorVinyl:(value:boolean)=>void;
+  vinylMaterialClass:VinylMaterialClass;setVinylMaterialClass:(value:VinylMaterialClass)=>void;
   dtfTrapPreset:string;setDtfTrapPreset:(value:string)=>void;
   dtfUnderbaseSpread:number;setDtfUnderbaseSpread:(value:number)=>void;
   screenLpi:number;setScreenLpi:(value:number)=>void;
   screenMode:"am"|"fm";setScreenMode:(value:"am"|"fm")=>void;
   screenTrapPreset:string;setScreenTrapPreset:(value:string)=>void;
-  embroideryDefaults:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand};
-  setEmbroideryDefaults:(value:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand})=>void;
+  embroideryDefaults:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass};
+  setEmbroideryDefaults:(value:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass})=>void;
   gang:{copies:number;width:number;height:number;fillSheet:boolean;gap:number;setCopies:(value:number)=>void;setWidth:(value:number)=>void;setHeight:(value:number)=>void;setFillSheet:(value:boolean)=>void;setGap:(value:number)=>void};
 };
-function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,dtfTrapPreset,setDtfTrapPreset,dtfUnderbaseSpread,setDtfUnderbaseSpread,screenLpi,setScreenLpi,screenMode,setScreenMode,screenTrapPreset,setScreenTrapPreset,embroideryDefaults,setEmbroideryDefaults,gang}:MethodSettingsProps){
+function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,vinylMaterialClass,setVinylMaterialClass,dtfTrapPreset,setDtfTrapPreset,dtfUnderbaseSpread,setDtfUnderbaseSpread,screenLpi,setScreenLpi,screenMode,setScreenMode,screenTrapPreset,setScreenTrapPreset,embroideryDefaults,setEmbroideryDefaults,gang}:MethodSettingsProps){
   const key=method.toLowerCase();
   const sheetPresets=[{id:"a4",label:"A4",w:210,h:297},{id:"letter",label:"Letter",w:216,h:279},{id:"dtf-30x40",label:"DTF 30×40",w:300,h:400},{id:"a3",label:"A3",w:297,h:420}];
   const dtfPresets=[{id:"dtf-pet-film-standard",label:"PET film · standard"},{id:"dtf-pet-film-fine",label:"PET film · fine detail"},{id:"dtf-dark-garment-heavy",label:"Dark garment · heavy"}];
@@ -562,8 +568,10 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
       <p className="hint">On Export, the preview updates to show the tiled logos on the sheet.</p>
     </>}
     {key.includes("vinyl")&&<>
+      <label>Material class<select value={vinylMaterialClass} onChange={e=>{const next=e.target.value as VinylMaterialClass;setVinylMaterialClass(next);setMirrorVinyl(vinylMirrorDefault(next))}}><option value="htv-smooth">HTV smooth (EasyWeed-class)</option><option value="htv-flock">HTV flock</option><option value="htv-glitter">HTV glitter</option><option value="adhesive-permanent">Adhesive permanent (651)</option><option value="adhesive-removable">Adhesive removable (631)</option><option value="adhesive-glitter">Adhesive glitter (851)</option></select></label>
+      <p className="hint" style={{marginTop:0}}>{vinylMaterialHint(vinylMaterialClass)}</p>
       <label className="check"><input type="checkbox" checked={mirrorVinyl} onChange={e=>setMirrorVinyl(e.target.checked)}/> Mirror for heat transfer (HTV)</label>
-      <p className="hint">Applied when you export vinyl cut SVG. Turn off for cold peel / adhesive vinyl.</p>
+      <p className="hint">Defaults from material class; override only when you intend a reverse-view application.</p>
     </>}
     {key.includes("screen")&&<>
       <label>Trap preset<select value={screenTrapPreset} onChange={e=>{const id=e.target.value;setScreenTrapPreset(id);if(id.includes("55"))setScreenLpi(55);else if(id.includes("45"))setScreenLpi(45)}}>{screenPresets.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
@@ -572,6 +580,8 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
       <p className="hint">Used for screen pack ZIP and halftone processors on export.</p>
     </>}
     {key==="embroidery"&&<>
+      <label>Fabric class<select value={embroideryDefaults.fabricClass} onChange={e=>{const fabricClass=e.target.value as EmbroideryFabricClass;const density=fabricDensity(fabricClass);setEmbroideryDefaults({...embroideryDefaults,fabricClass,spacing:density})}}><option value="woven">Stable woven</option><option value="tshirt">T-shirt knit</option><option value="pique">Pique polo</option><option value="fleece">Fleece / jumper</option><option value="performance-knit">Performance knit</option></select></label>
+      <p className="hint" style={{marginTop:0}}>Sets density / underlay defaults and review scoring. Sew-out still required.</p>
       <p className="hint" style={{marginTop:0}}>Stitch family</p>
       <div className="segmented">{([["auto","Auto"],["satin","Satin"],["tatami","Tatami"],["running","Run"]] as const).map(([id,label])=><button key={id} type="button" className={(embroideryDefaults.kind??"auto")===id?"active":""} onClick={()=>setEmbroideryDefaults({...embroideryDefaults,kind:id})}>{label}</button>)}</div>
       <AdjustField label="Density / row spacing" value={embroideryDefaults.spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>setEmbroideryDefaults({...embroideryDefaults,spacing:v})} meta={densityLabel(embroideryDefaults.spacing)}/>
@@ -596,6 +606,25 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
   </div>;
 }
 
+function fabricDensity(fabric:EmbroideryFabricClass){
+  if(fabric==="pique")return .42;
+  if(fabric==="fleece")return .45;
+  if(fabric==="performance-knit")return .48;
+  return .4;
+}
+function vinylMirrorDefault(material:VinylMaterialClass){
+  return material.startsWith("htv-");
+}
+function vinylMaterialHint(material:VinylMaterialClass){
+  switch(material){
+    case"htv-flock":return"Warn below 1.2 mm · reject below 0.8 mm. Higher force / slower send than smooth HTV.";
+    case"htv-glitter":return"Warn below 1.5 mm · reject below 1.0 mm. Specialty glitter lane.";
+    case"adhesive-permanent":return"ORACAL 651-class. Mirror off. Warn below 1.0 mm · reject below 0.6 mm. Test-cut liner depth.";
+    case"adhesive-removable":return"ORACAL 631-class. Mirror off. Same feature thresholds as 651; watch transfer-tape release.";
+    case"adhesive-glitter":return"ORACAL 851-class. Mirror off. Warn below 1.5 mm · reject below 1.0 mm.";
+    default:return"EasyWeed-class smooth HTV. Mirror on. Warn below 1.0 mm · reject below 0.6 mm.";
+  }
+}
 function densityLabel(spacing:number){
   if(spacing<=.35)return{left:"Dense fill",right:"More stitches"};
   if(spacing<=.55)return{left:"Balanced",right:"Typical logos"};

@@ -19,19 +19,29 @@ Current output:
 
 The colour and generic white-underbase separations are artwork-ready inputs to a DTF workflow. Printer-specific white density, ink limiting, ICC conversion, curing parameters and final RIP screening remain operator responsibilities. PrintStudio must not claim that a generic package replaces those device-specific stages.
 
-## Heat-transfer vinyl
+## Heat-transfer vinyl / adhesive vinyl
 
 Current output:
 
 - Millimetre-based SVG cut paths
 - Transparent-hole preservation using even-odd paths
-- Mirroring enabled by default and switchable in the review dialog
+- Material class selector (HTV smooth / flock / glitter, adhesive permanent / removable / glitter)
+- Mirror defaults from material class (HTV on, adhesive off) and switchable in the review dialog
 - Multiple disconnected contours
 - ViewBox, weed box and declared size fitted to cut contours (plus margin)
-- Warning for details below 1 mm
+- Server `POST /v1/vinyl/review` policy: material-aware warn/reject feature thresholds, counter-risk warnings, and a review scorecard
+- Cut SVG / PDF / TIFF / ZIP download blocked when review decision is `blocked` or hard-stop diagnostics are present
 - Clipper2 union cleanup is required; exports fail closed when `polygonBoolean` is unavailable
 
-Remaining specialist work includes multi-colour registration marks and blade/material profiles.
+Conservative thresholds (shop tests may override):
+
+| Material class | Warn below | Reject below | Mirror default |
+|---|---:|---:|---|
+| `htv-smooth` / adhesive permanent & removable | 1.0 mm | 0.6 mm | HTV on / adhesive off |
+| `htv-flock` | 1.2 mm | 0.8 mm | on |
+| `htv-glitter` / `adhesive-glitter` | 1.5 mm | 1.0 mm | HTV on / adhesive off |
+
+Remaining specialist work includes multi-colour registration marks, cutter-software-specific AI/EPS packs, and blade force/speed numeric presets per machine brand.
 
 ## Screen printing
 

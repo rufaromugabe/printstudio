@@ -1,11 +1,13 @@
-import { api, PolygonPaths } from "./api";
+import { api, PolygonPaths, VinylMaterialClass, VinylReview } from "./api";
 import { digitizeElements, DigitizerElement, DigitizerView } from "./embroidery-digitizer";
 
 type ExportElement=DigitizerElement&{assetId?:string;sourceWidth?:number;sourceHeight?:number;textAlign?:"left"|"center"|"right";lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean};
 export type ProductionMethod="DTF"|"Vinyl"|"Screen print"|"Sublimation";
-export type ProductionResult={method:ProductionMethod;blob:Blob;fileName:string;mime:string;previewUrl:string;summary:string;warnings:string[];widthMM:number;heightMM:number;pixelWidth?:number;pixelHeight?:number;sha256?:string;renderer?:"server"|"browser"};
+export type ProductionResult={method:ProductionMethod;blob:Blob;fileName:string;mime:string;previewUrl:string;summary:string;warnings:string[];widthMM:number;heightMM:number;pixelWidth?:number;pixelHeight?:number;sha256?:string;renderer?:"server"|"browser";vinylReview?:VinylReview;vinylBlocked?:boolean};
+export type VinylExportOptions={mirror?:boolean;materialClass?:VinylMaterialClass|string};
 
 const CONTENT_MARGIN_MM=1.5;
+const DEFAULT_VINYL_MATERIAL:VinylMaterialClass="htv-smooth";
 
 export async function refreshExportElementURLs(elements:ExportElement[]):Promise<ExportElement[]>{
   return Promise.all(elements.map(async element=>{
@@ -19,8 +21,11 @@ export async function refreshExportElementURLs(elements:ExportElement[]):Promise
   }));
 }
 
-export async function prepareProductionExport(method:ProductionMethod,name:string,elements:ExportElement[],view:DigitizerView&{bleedMm?:number},mirrorVinyl=true):Promise<ProductionResult>{
+export async function prepareProductionExport(method:ProductionMethod,name:string,elements:ExportElement[],view:DigitizerView&{bleedMm?:number},mirrorOrOptions:boolean|VinylExportOptions=true):Promise<ProductionResult>{
   if(!elements.length)throw new Error("Add at least one design element before exporting.");
+  const vinylOpts:VinylExportOptions=typeof mirrorOrOptions==="boolean"?{mirror:mirrorOrOptions}:{...mirrorOrOptions};
+  const mirrorVinyl=vinylOpts.mirror??true;
+  const materialClass=(vinylOpts.materialClass||DEFAULT_VINYL_MATERIAL) as VinylMaterialClass;
   const clean=safeName(name),warnings:string[]=[];
   elements=await refreshExportElementURLs(elements);
   const capabilities=await api.productionCapabilities().catch(()=>null);
@@ -47,10 +52,17 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     if(!capabilities?.polygonBoolean)throw new Error("Vinyl cut paths require the Clipper2 production backend. Rebuild/deploy the API with -tags clipper2 — approximate contour exports are disabled.");
     const exteriorCount=traced.regions.length;
     const cleaned=await cleanVinylPaths(traced.regions.map(r=>r.geometry.rings),view);
-    const tiny=cleaned.filter(path=>{const xs=path.map(p=>p.x),ys=path.map(p=>p.y);return Math.min(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys))<1}).length;
-    if(tiny)warnings.push(`${tiny} contour(s) contain details under 1 mm that may weed poorly.`);
     const holeCount=Math.max(0,cleaned.length-exteriorCount);
     if(holeCount>0)warnings.push(`Kept ${holeCount} interior cutout(s) for weeding.`);
+    const reviewResult=await api.vinylReview({materialClass,paths:cleaned,mirrored:mirrorVinyl});
+    for(const d of reviewResult.diagnostics){
+      const prefix=d.severity==="error"?"Hard stop":"Warning";
+      warnings.push(`${prefix}: ${d.message}${d.pathId?` (${d.pathId})`:""}`);
+    }
+    warnings.push(`${reviewResult.profile.label} · warn < ${reviewResult.profile.warnFeatureMm.toFixed(1)} mm · reject < ${reviewResult.profile.rejectFeatureMm.toFixed(1)} mm`);
+    if(reviewResult.profile.notes)warnings.push(reviewResult.profile.notes);
+    const vinylBlocked=reviewResult.review.decision==="blocked"||reviewResult.diagnostics.some(d=>d.severity==="error");
+    if(vinylBlocked)warnings.push("Cut SVG download is blocked until hard stops are resolved.");
     const framed=framePathsToContent(cleaned,CONTENT_MARGIN_MM);
     const compound=framed.paths.map(path=>pathToSVG(path)).join("");
     const transform=mirrorVinyl?`translate(${framed.widthMM} 0) scale(-1 1)`:"";
@@ -59,7 +71,7 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     const blob=new Blob([svg],{type:"image/svg+xml"});
     const sha256=await hashBlob(blob);
     warnings.push(`Sized to cut contours (${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm), not the full print area.`);
-    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${cleaned.length} contours · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server"};
+    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · ${reviewResult.profile.label} · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${cleaned.length} contours · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server",vinylReview:reviewResult.review,vinylBlocked};
   }
   const colors=[...new Set(traced.regions.map(r=>r.threadId))];
   if(colors.length>8)warnings.push(`${colors.length} colours create ${colors.length} screen separations; consider reducing the palette.`);

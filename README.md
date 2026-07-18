@@ -29,9 +29,11 @@ Or run the whole local stack with `docker compose up --build`. Development mode 
 - `docs/ARCHITECTURE.md` — service boundaries and delivery roadmap
 - `docs/PRODUCT_TEMPLATES.md` — configurable products, views, physical sizes and properties
 - `docs/EMBROIDERY_ENGINE.md` — production-grade embroidery compiler architecture and roadmap
+- `docs/VINYL_ENGINE.md` — HTV / adhesive material classes, feature thresholds and cut-review policy
 - `docs/PRODUCTION_EXPORTS.md` — DTF, vinyl, screen-print and sublimation output guarantees and boundaries
 - `docs/PRODUCTION_ENGINE.md` — Go prepress algorithms, native colour/vector adapters and verification
 - `services/api/embroidery` — deterministic embroidery core with running/tatami generation, validation, DST round trips and SVG diagnostics
+- `services/api/vinyl` — material-class cut policy, feature thresholds and review scoring
 - `src/lib/embroidery-digitizer.ts` — browser contour tracing for styled text, circular text and transparent artwork
 - `src/lib/production-export.ts` — physical-size DTF, vinyl, screen-print and sublimation rendering
 - `src/lib/production-packaging.ts` — PDF, TIFF, ZIP manifests, gang sheets, hashes and local export history
@@ -48,7 +50,7 @@ Embroidery export now traces rendered text and transparent artwork into millimet
 
 Single-hole lettering and badge outlines can now use closed-ring satin with resampled and automatically aligned inner/outer rails. Multi-hole or genuinely branching geometry remains an explicit review case. The compiler routes nearest blocks within stable thread groups, emits colour changes only when thread changes, uses jump travel between underlay and top stitching, and writes measured design extents into the DST header. When Embroidery is selected, each editor element exposes expert overrides for stitch family, row spacing, direction and underlay; automatic mode remains the default.
 
-Non-embroidery methods now dispatch through a production review workflow. DTF produces transparent 300-DPI PNG with placed-size DPI warnings; vinyl produces mirrored millimetre SVG cut paths with hole preservation and small-detail warnings; screen printing produces colour-grouped layered SVG for solid separations; sublimation produces a 300-DPI PNG with configured bleed and coverage checks. Device-specific RIP, ICC and halftone stages are clearly identified rather than simulated.
+Non-embroidery methods now dispatch through a production review workflow. DTF produces transparent 300-DPI PNG with placed-size DPI warnings; vinyl produces millimetre SVG cut paths with hole preservation, material-class thresholds (HTV vs adhesive), a review scorecard and hard-stop download gating; screen printing produces colour-grouped layered SVG for solid separations; sublimation produces a 300-DPI PNG with configured bleed and coverage checks. Device-specific RIP, ICC and halftone stages are clearly identified rather than simulated.
 
 Reviewed exports can also be downloaded as exact-size PDF, 300-DPI TIFF or a production ZIP containing artwork, SHA-256 manifest and operator instructions. DTF includes configurable original-size gang sheets within the browser memory ceiling. Vinyl output deduplicates contours and adds a weed box. Downloads are recorded immutably in browser IndexedDB with hashes and can be downloaded again from the production dialog.
 

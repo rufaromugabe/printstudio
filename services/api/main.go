@@ -121,6 +121,7 @@ func main() {
 	mux.Handle("GET /v1/assets/{id}/url", api.auth(http.HandlerFunc(api.assetURL)))
 	mux.Handle("POST /v1/embroidery/compile", api.auth(api.requireNotViewer(http.HandlerFunc(compileEmbroidery))))
 	mux.Handle("POST /v1/embroidery/export/dst", api.auth(api.requireNotViewer(http.HandlerFunc(exportEmbroidery))))
+	mux.Handle("POST /v1/vinyl/review", api.auth(api.requireNotViewer(http.HandlerFunc(reviewVinyl))))
 	mux.Handle("GET /v1/production/capabilities", api.auth(http.HandlerFunc(productionCapabilities)))
 	mux.Handle("GET /v1/production/gates", api.auth(http.HandlerFunc(productionGates)))
 	mux.Handle("GET /v1/production/metrics", api.auth(api.requireRole("admin", http.HandlerFunc(productionMetrics))))
