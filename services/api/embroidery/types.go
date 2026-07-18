@@ -86,14 +86,16 @@ type MachineProfile struct {
 }
 
 type Document struct {
-	Version         int            `json:"version"`
-	Units           string         `json:"units"`
-	SourceHash      string         `json:"sourceHash"`
-	CompilerVersion string         `json:"compilerVersion"`
-	Machine         MachineProfile `json:"machine"`
-	Regions         []Region       `json:"regions"`
-	Plan            []Block        `json:"plan"`
-	Diagnostics     []Diagnostic   `json:"diagnostics"`
+	Version         int             `json:"version"`
+	Units           string          `json:"units"`
+	SourceHash      string          `json:"sourceHash"`
+	CompilerVersion string          `json:"compilerVersion"`
+	Machine         MachineProfile  `json:"machine"`
+	Fabric          FabricProfile   `json:"fabric"`
+	Review          ReviewScorecard `json:"review"`
+	Regions         []Region        `json:"regions"`
+	Plan            []Block         `json:"plan"`
+	Diagnostics     []Diagnostic    `json:"diagnostics"`
 }
 
 type Severity string

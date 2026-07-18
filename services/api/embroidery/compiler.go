@@ -8,9 +8,13 @@ import (
 	"math"
 )
 
-const CompilerVersion = "0.2.1"
+const CompilerVersion = "0.3.0"
 
 func Compile(regions []Region, profile MachineProfile) (Document, error) {
+	return CompileWithFabric(regions, profile, FabricWoven)
+}
+
+func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass FabricClass) (Document, error) {
 	if profile.ID == "" {
 		profile = DefaultProfile()
 	}
@@ -18,9 +22,13 @@ func Compile(regions []Region, profile MachineProfile) (Document, error) {
 	if minStitch <= 0 {
 		minStitch = .4
 	}
-	source, _ := json.Marshal(regions)
+	regions, fabric := ApplyFabricProfile(regions, fabricClass)
+	source, _ := json.Marshal(struct {
+		Regions []Region     `json:"regions"`
+		Fabric  FabricClass  `json:"fabric"`
+	}{Regions: regions, Fabric: fabric.Class})
 	sum := sha256.Sum256(source)
-	d := Document{Version: SchemaVersion, Units: "mm", SourceHash: hex.EncodeToString(sum[:]), CompilerVersion: CompilerVersion, Machine: profile, Regions: regions}
+	d := Document{Version: SchemaVersion, Units: "mm", SourceHash: hex.EncodeToString(sum[:]), CompilerVersion: CompilerVersion, Machine: profile, Fabric: fabric, Regions: regions}
 	for _, r := range regions {
 		if r.ID == "" {
 			return d, fmt.Errorf("region ID is required")
@@ -59,7 +67,18 @@ func Compile(regions []Region, profile MachineProfile) (Document, error) {
 		d.Plan = append(d.Plan, block)
 	}
 	d.Plan = routePlan(d.Plan)
-	d.Diagnostics = Validate(d)
+	d.Diagnostics = append(Validate(d), PolicyValidate(d.Regions, fabric)...)
+	review := ScoreReview(d.Regions, fabric, d.Diagnostics)
+	d.Review = review
+	if review.Decision == ReviewHuman {
+		d.Diagnostics = append(d.Diagnostics, Diagnostic{Severity: Warning, Code: "HUMAN_DIGITIZER_REQUIRED", Message: review.Summary})
+	}
+	if review.Decision == ReviewSemiAuto {
+		d.Diagnostics = append(d.Diagnostics, Diagnostic{Severity: Warning, Code: "SEMI_AUTO_REVIEW", Message: review.Summary})
+	}
+	if review.Decision == ReviewBlocked && !HasErrors(d.Diagnostics) {
+		d.Diagnostics = append(d.Diagnostics, Diagnostic{Severity: Error, Code: "HUMAN_DIGITIZER_REQUIRED", Message: review.Summary})
+	}
 	return d, nil
 }
 

@@ -8,9 +8,10 @@ import (
 )
 
 type embroideryRequest struct {
-	Name    string                    `json:"name"`
-	Regions []embroidery.Region       `json:"regions"`
-	Machine embroidery.MachineProfile `json:"machine"`
+	Name        string                    `json:"name"`
+	FabricClass string                    `json:"fabricClass"`
+	Regions     []embroidery.Region       `json:"regions"`
+	Machine     embroidery.MachineProfile `json:"machine"`
 }
 
 func compileEmbroidery(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +19,7 @@ func compileEmbroidery(w http.ResponseWriter, r *http.Request) {
 	if decode(w, r, &in) != nil {
 		return
 	}
-	document, err := embroidery.Compile(in.Regions, in.Machine)
+	document, err := embroidery.CompileWithFabric(in.Regions, in.Machine, embroidery.NormalizeFabric(in.FabricClass))
 	if err != nil {
 		problem(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -31,9 +32,13 @@ func exportEmbroidery(w http.ResponseWriter, r *http.Request) {
 	if decode(w, r, &in) != nil {
 		return
 	}
-	document, err := embroidery.Compile(in.Regions, in.Machine)
+	document, err := embroidery.CompileWithFabric(in.Regions, in.Machine, embroidery.NormalizeFabric(in.FabricClass))
 	if err != nil {
 		problem(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if embroidery.HasErrors(document.Diagnostics) {
+		problem(w, http.StatusUnprocessableEntity, "embroidery failed machine or fabric policy checks; resolve diagnostics before DST export")
 		return
 	}
 	data, err := embroidery.EncodeDST(document, in.Name)
@@ -54,6 +59,8 @@ func exportEmbroidery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-dst")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.dst"`)
 	w.Header().Set("X-Embroidery-Source-Hash", document.SourceHash)
+	w.Header().Set("X-Embroidery-Fabric", string(document.Fabric.Class))
+	w.Header().Set("X-Embroidery-Review", string(document.Review.Decision))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }

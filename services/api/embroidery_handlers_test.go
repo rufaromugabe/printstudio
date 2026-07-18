@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const embroideryFixture = `{"name":"API TEST","regions":[{"id":"panel","threadId":"black","geometry":{"rings":[[{"x":-10,"y":-5},{"x":10,"y":-5},{"x":10,"y":5},{"x":-10,"y":5}]]},"kind":"tatami","spacingMm":1,"stitchLengthMm":3,"edgeUnderlay":true}],"machine":{}}`
+const embroideryFixture = `{"name":"API TEST","fabricClass":"tshirt","regions":[{"id":"panel","threadId":"black","geometry":{"rings":[[{"x":-10,"y":-5},{"x":10,"y":-5},{"x":10,"y":5},{"x":-10,"y":5}]]},"kind":"tatami","spacingMm":0.4,"stitchLengthMm":3,"edgeUnderlay":true}],"machine":{}}`
 
 func TestCompileEmbroideryHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/embroidery/compile", strings.NewReader(embroideryFixture))
@@ -17,8 +17,9 @@ func TestCompileEmbroideryHandler(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), `"compilerVersion":"0.2.0"`) || !strings.Contains(res.Body.String(), `"svg":"`) {
-		t.Fatalf("missing compiler response: %s", res.Body.String())
+	body := res.Body.String()
+	if !strings.Contains(body, `"compilerVersion":"0.3.0"`) || !strings.Contains(body, `"svg":"`) || !strings.Contains(body, `"review"`) || !strings.Contains(body, `"tshirt"`) {
+		t.Fatalf("missing compiler response: %s", body)
 	}
 }
 
@@ -35,5 +36,8 @@ func TestExportEmbroideryHandler(t *testing.T) {
 	}
 	if res.Header().Get("X-Embroidery-Source-Hash") == "" {
 		t.Fatal("missing reproducibility hash")
+	}
+	if res.Header().Get("X-Embroidery-Fabric") != "tshirt" {
+		t.Fatalf("fabric header %q", res.Header().Get("X-Embroidery-Fabric"))
 	}
 }
