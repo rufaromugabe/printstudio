@@ -32,7 +32,9 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
   const capabilities=await api.productionCapabilities().catch(()=>null);
   if(method==="DTF"||method==="Sublimation"){
     const bleed=method==="Sublimation"?(view.bleedMm??3):0,dpi=300;
-    const cropToContent=method==="DTF";
+    // Keep full print-area framing so preview placement matches the shirt mockup.
+    // (Cropping to ink made artwork look centered/zoomed and broke alignment.)
+    const cropToContent=false;
     const fullWidthMM=view.physicalWidthMm+bleed*2,fullHeightMM=view.physicalHeightMm+bleed*2;
     for(const e of elements)if(e.type==="image"&&e.sourceWidth){const physical=e.w/view.canvasWidth*view.physicalWidthMm,dpiActual=e.sourceWidth/(physical/25.4);if(dpiActual<150)warnings.push(`${layerName(e)} is only ${Math.round(dpiActual)} DPI at its placed size.`);else if(dpiActual<300)warnings.push(`${layerName(e)} is ${Math.round(dpiActual)} DPI; 300 DPI is preferred.`)}
     if(method==="Sublimation"&&!coversCanvas(elements,view))warnings.push("Artwork does not cover the full bleed area; unprinted edges may appear after pressing.");
@@ -42,10 +44,10 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
       elements:elements.map(e=>({id:e.id,type:e.type,value:e.value,assetId:e.assetId,x:e.x,y:e.y,w:e.w,h:e.h,rotation:e.rotation,color:e.color,fontSize:e.fontSize,fontWeight:e.fontWeight,letterSpacing:e.letterSpacing,lineHeight:e.lineHeight,sourceWidth:e.sourceWidth,sourceHeight:e.sourceHeight})),
     });
     const pixelWidth=rendered.widthPx||Math.ceil(fullWidthMM/25.4*dpi),pixelHeight=rendered.heightPx||Math.ceil(fullHeightMM/25.4*dpi);
-    const widthMM=cropToContent?pixelsToMM(pixelWidth,dpi):fullWidthMM;
-    const heightMM=cropToContent?pixelsToMM(pixelHeight,dpi):fullHeightMM;
+    const widthMM=fullWidthMM;
+    const heightMM=fullHeightMM;
     warnings.push("Rendered on the production server (not the browser canvas).");
-    if(cropToContent)warnings.push(`Sized to inked artwork (${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm), not the full print area.`);
+    warnings.push(`Framed to the print area (${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm) — same placement as the shirt mockup.`);
     return{method,blob:rendered.blob,fileName:`${clean}-${method.toLowerCase().replace(" ","-")}-300dpi.png`,mime:"image/png",previewUrl:URL.createObjectURL(rendered.blob),summary:`Server ${pixelWidth} × ${pixelHeight}px at 300 DPI · ${widthMM.toFixed(1)} × ${heightMM.toFixed(1)} mm${bleed?` with ${bleed} mm bleed`:""}`,warnings,widthMM,heightMM,pixelWidth,pixelHeight,sha256:rendered.sha256,renderer:"server"};
   }
   if(elements.some(e=>e.type==="image")&&!capabilities?.vectorTrace){
@@ -162,5 +164,4 @@ function layerName(e:ExportElement){return e.type==="text"?`Text “${e.value.sl
 function safeName(name:string){return name.trim().replace(/[^a-z0-9_-]+/gi,"-").replace(/^-|-$/g,"")||"printstudio-design"}
 function escapeXML(value:string){return value.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[c]!))}
 function validColor(value:string){return /^#[0-9a-f]{6}$/i.test(value)?value:"#000000"}
-function pixelsToMM(px:number,dpi:number){return px/dpi*25.4}
 async function hashBlob(blob:Blob){const digest=await crypto.subtle.digest("SHA-256",await blob.arrayBuffer());return Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,"0")).join("")}

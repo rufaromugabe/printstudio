@@ -8,10 +8,12 @@ import (
 )
 
 type embroideryRequest struct {
-	Name        string                    `json:"name"`
-	FabricClass string                    `json:"fabricClass"`
-	Regions     []embroidery.Region       `json:"regions"`
-	Machine     embroidery.MachineProfile `json:"machine"`
+	Name          string                    `json:"name"`
+	FabricClass   string                    `json:"fabricClass"`
+	Regions       []embroidery.Region       `json:"regions"`
+	Machine       embroidery.MachineProfile `json:"machine"`
+	PrintWidthMm  float64                   `json:"printWidthMm"`
+	PrintHeightMm float64                   `json:"printHeightMm"`
 }
 
 func compileEmbroidery(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +26,10 @@ func compileEmbroidery(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	write(w, http.StatusOK, map[string]any{"document": document, "svg": embroidery.DiagnosticSVG(document)})
+	write(w, http.StatusOK, map[string]any{
+		"document": document,
+		"svg":      embroidery.DiagnosticSVG(document, in.PrintWidthMm, in.PrintHeightMm),
+	})
 }
 
 func exportEmbroidery(w http.ResponseWriter, r *http.Request) {

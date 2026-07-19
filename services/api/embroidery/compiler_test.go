@@ -82,9 +82,12 @@ func TestDSTAndSVG(t *testing.T) {
 	if math.Abs(last.X) > 0.0001 || math.Abs(last.Y) > 0.0001 {
 		t.Fatalf("closed outline decoded to unexpected endpoint: %#v", last)
 	}
-	svg := DiagnosticSVG(d)
+	svg := DiagnosticSVG(d, 300, 400)
 	if !strings.Contains(svg, "data-region=\"outline\"") {
 		t.Fatal("SVG lacks region diagnostics")
+	}
+	if !strings.Contains(svg, `data-print-width-mm="300"`) || !strings.Contains(svg, `class="print-area"`) {
+		t.Fatal("SVG should frame the print area, not crop to stitches")
 	}
 }
 
