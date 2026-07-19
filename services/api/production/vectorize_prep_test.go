@@ -142,3 +142,74 @@ func TestTraceProfileProducesExplicitPotraceArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestVectorSimilarityPassesFaithfulContour(t *testing.T) {
+	img := solidSquare(64, 16, 16, 32)
+	rings := [][]VectorPoint{{{16, 16}, {48, 16}, {48, 48}, {16, 48}}}
+	report, diagnostics := EvaluateVectorSimilarity(img, rings, ContentFlatArt, true)
+	if report.Status != "pass" || report.Score < 95 {
+		t.Fatalf("faithful contour should pass: %+v diagnostics=%+v", report, diagnostics)
+	}
+	if report.ProofPNGBase64 == "" {
+		t.Fatal("requested similarity overlay was omitted")
+	}
+}
+
+func TestVectorSimilarityRejectsLostTextCounter(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 64, 64))
+	for y := 8; y < 56; y++ {
+		for x := 8; x < 56; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{A: 255})
+		}
+	}
+	for y := 24; y < 40; y++ {
+		for x := 24; x < 40; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{})
+		}
+	}
+	// Deliberately omit the inner counter from the reconstructed rings.
+	rings := [][]VectorPoint{{{8, 8}, {56, 8}, {56, 56}, {8, 56}}}
+	report, diagnostics := EvaluateVectorSimilarity(img, rings, ContentTextLike, false)
+	if report.Status != "fail" || report.MissingCounters != 1 || !HasVectorErrors(diagnostics) {
+		t.Fatalf("lost counter must hard fail: %+v diagnostics=%+v", report, diagnostics)
+	}
+}
+
+func TestParseTesseractTSVBuildsLinesAndConfidence(t *testing.T) {
+	tsv := []byte("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n" +
+		"5\t1\t1\t1\t1\t1\t10\t10\t40\t20\t95.0\tHELLO\n" +
+		"5\t1\t1\t1\t1\t2\t55\t10\t40\t20\t85.0\tSHOP\n" +
+		"5\t1\t1\t1\t2\t1\t10\t35\t30\t20\t90.0\t2026\n")
+	words, text, confidence := parseTesseractTSV(tsv)
+	if len(words) != 3 || text != "HELLO SHOP\n2026" {
+		t.Fatalf("unexpected OCR parse: %q %#v", text, words)
+	}
+	if confidence < 89 || confidence > 93 {
+		t.Fatalf("unexpected weighted confidence %.2f", confidence)
+	}
+	candidates := inferFontCandidates(text, words)
+	if len(candidates) == 0 || candidates[0].Family != "Impact" {
+		t.Fatalf("uppercase display text should surface Impact as a candidate: %#v", candidates)
+	}
+}
+
+func TestServerLabPalettePreservesFlatSpotColors(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 80, 40))
+	mask := make([]bool, 80*40)
+	for y := 5; y < 35; y++ {
+		for x := 5; x < 75; x++ {
+			pixel := color.NRGBA{R: 210, G: 25, B: 45, A: 255}
+			if x >= 40 {
+				pixel = color.NRGBA{R: 20, G: 65, B: 190, A: 255}
+			}
+			img.SetNRGBA(x, y, pixel)
+			mask[y*80+x] = true
+		}
+	}
+	buckets := buildLabBuckets(img, mask, 80, 40)
+	clusters := mergeLabClusters(clusterLabBuckets(buckets, 8), 3)
+	report := evaluateColorSimilarity(buckets, clusters, 8)
+	if len(clusters) != 2 || report.Status != "pass" || report.MeanDeltaE > 0.5 {
+		t.Fatalf("flat two-colour artwork should survive server clustering: clusters=%#v report=%+v", clusters, report)
+	}
+}

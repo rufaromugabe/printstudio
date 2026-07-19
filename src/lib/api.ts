@@ -53,6 +53,8 @@ export type VectorPrepMetadata={
   qualityScore:number;
   steps:string[];
 };
+export type VectorSimilarityReport={score:number;status:"pass"|"review"|"fail";intersectionOverUnion:number;precision:number;recall:number;edgeF1:number;sourceComponents:number;tracedComponents:number;sourceCounters:number;tracedCounters:number;missingComponents:number;missingCounters:number;proofWidthPx:number;proofHeightPx:number;proofPngBase64?:string};
+export type OCRReport={available:boolean;attempted:boolean;text?:string;confidence:number;language?:string;words?:{text:string;confidence:number;x:number;y:number;width:number;height:number}[];fontCandidates?:{family:string;confidence:number;reason:string;weight?:number}[];editableRebuildRecommended:boolean;requiresHumanConfirmation:boolean;diagnostic?:string};
 export type VectorContourSet={
   rings:VectorPoint[][];
   sourceHash:string;
@@ -63,8 +65,11 @@ export type VectorContourSet={
   minFeatureMm:number;
   units:"px"|"mm"|string;
   prep:VectorPrepMetadata;
+  similarity:VectorSimilarityReport;
+  ocr:OCRReport;
   diagnostics?:VectorDiagnostic[];
 };
+export type ColorVectorResult={layers:{color:string;pixelCount:number;coverage:number;contours:VectorContourSet}[];sourceHash:string;paletteMethod:string;contentKind:string;similarity:{score:number;status:"pass"|"review"|"fail";meanDeltaE:number;p95DeltaE:number;maxColors:number;actualColors:number};ocr:OCRReport;diagnostics?:VectorDiagnostic[]};
 export type VectorizePlacement={
   canvasWidth:number;
   canvasHeight:number;
@@ -175,12 +180,14 @@ export const api = {
   approveProductionProof:(id:string)=>request<{id:string;status:string;frozen:boolean}>(`/v1/production/proofs/${id}/approve`,{method:"POST",body:"{}"}),
   productionBoolean:(subject:PolygonPaths,clip:PolygonPaths,operation:"union"|"difference"|"intersection"|"xor")=>request<{paths:PolygonPaths}>("/v1/production/vector/boolean",{method:"POST",body:JSON.stringify({subject,clip,operation})}),
   productionOffset:(paths:PolygonPaths,deltaMm:number,join:"round"|"square"|"miter"="round",miterLimit=2)=>request<{paths:PolygonPaths}>("/v1/production/vector/offset",{method:"POST",body:JSON.stringify({paths,deltaMm,join,miterLimit})}),
-  productionVectorize:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;assetId?:string}):Promise<VectorContourSet>=>{
+  productionVectorize:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;assetId?:string;includeProof?:boolean;ocr?:boolean}):Promise<VectorContourSet>=>{
     if(options.assetId){
       return request<VectorContourSet>("/v1/production/vectorize",{method:"POST",body:JSON.stringify({assetId:options.assetId,method:options.method??"vinyl",mlPrep:!!options.mlPrep,alphaCutoff:options.alphaCutoff,placement:options.placement})});
     }
     const query=new URLSearchParams({method:options.method??"vinyl",mlPrep:options.mlPrep?"true":"false"});
     if(options.alphaCutoff!=null)query.set("alphaCutoff",String(options.alphaCutoff));
+    if(options.includeProof)query.set("proof","true");
+    if(options.ocr===false)query.set("ocr","false");
     const headers:Record<string,string>={"Content-Type":artwork.type||"image/png"};
     if(options.placement)headers["X-PrintStudio-Placement"]=JSON.stringify(options.placement);
     const response=await fetch(`${base}/v1/production/vectorize?${query}`,{method:"POST",credentials:"include",headers:{...authHeaders(headers)},body:artwork});
@@ -188,6 +195,19 @@ export const api = {
     const body=await response.json().catch(()=>({}));
     if(!response.ok)throw new Error(body.message??body.error??`Vectorize failed (${response.status})`);
     return body as VectorContourSet;
+  },
+  productionVectorizeColor:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;maxColors?:number;includeProof?:boolean;ocr?:boolean}):Promise<ColorVectorResult>=>{
+    const query=new URLSearchParams({method:options.method??"screen",mode:"color",maxColors:String(options.maxColors??8),mlPrep:options.mlPrep?"true":"false"});
+    if(options.alphaCutoff!=null)query.set("alphaCutoff",String(options.alphaCutoff));
+    if(options.includeProof)query.set("proof","true");
+    if(options.ocr===false)query.set("ocr","false");
+    const headers:Record<string,string>={"Content-Type":artwork.type||"image/png"};
+    if(options.placement)headers["X-PrintStudio-Placement"]=JSON.stringify(options.placement);
+    const response=await fetch(`${base}/v1/production/vectorize?${query}`,{method:"POST",credentials:"include",headers:{...authHeaders(headers)},body:artwork});
+    if(response.status===401){handleUnauthorized();const body=await response.json().catch(()=>({}));throw new Error(body.message??"Session expired — sign in again")}
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(body.message??body.error??`Colour vectorize failed (${response.status})`);
+    return body as ColorVectorResult;
   },
   productionSpotMatch:(colors:string[],maxDeltaE=6)=>request<{matches:{ink:{id:string;name:string;hex:string;family:string};deltaE00:number;exact:boolean}[];library:string}>("/v1/production/spot/match",{method:"POST",body:JSON.stringify({colors,maxDeltaE})}),
   productionAngleCheck:(angles:{cyan:number;magenta:number;yellow:number;black:number})=>request<{ok:boolean;conflicts:{channelA:string;channelB:string;deltaDegrees:number;severity:string;message:string}[]}>("/v1/production/screen/angles",{method:"POST",body:JSON.stringify(angles)}),

@@ -1,10 +1,10 @@
-import { api, EmbroideryKind, EmbroideryPoint, EmbroideryRegion, VectorContourSet, VectorPrepMetadata } from "./api";
+import { api, EmbroideryKind, EmbroideryPoint, EmbroideryRegion, OCRReport, VectorContourSet, VectorPrepMetadata, VectorSimilarityReport } from "./api";
 import { nearestThread, ThreadBrand } from "./thread-charts";
 
 export type DigitizerEmbroideryKind="auto"|EmbroideryKind;
 export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:DigitizerEmbroideryKind;embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number;embroideryFoamHeightMm?:2|3;assetId?:string};
 export type DigitizerView={canvasWidth:number;canvasHeight:number;physicalWidthMm:number;physicalHeightMm:number};
-export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>;vectorDiagnostics?:{code:string;message:string;severity:string}[];vectorReports?:VectorPrepMetadata[]};
+export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>;vectorDiagnostics?:{code:string;message:string;severity:string}[];vectorReports?:VectorPrepMetadata[];vectorSimilarities?:VectorSimilarityReport[];ocrReports?:{elementId:string;report:OCRReport}[]};
 
 const MAX_IMAGE_THREADS=8;
 const ALPHA_CUTOFF=32;
@@ -23,10 +23,12 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
   const mlPrep=options?.mlPrep??true;
   const vectorDiagnostics:{code:string;message:string;severity:string}[]=[];
   const vectorReports:VectorPrepMetadata[]=[];
+  const vectorSimilarities:VectorSimilarityReport[]=[];
+  const ocrReports:{elementId:string;report:OCRReport}[]=[];
   for(const element of elements){
     try{
       const layers=element.type==="image"
-        ? await extractImageLayersServer(element,view,mode,method,mlPrep,vectorDiagnostics,vectorReports)
+        ? await extractImageLayersServer(element,view,mode,method,mlPrep,vectorDiagnostics,vectorReports,vectorSimilarities,ocrReports)
         : await extractTextLayers(element);
       if(!layers.length){failures.push(element.id);continue}
       for(const [layerIndex,layer] of layers.entries()){
@@ -89,7 +91,7 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
   }
   if(failures.length)throw new Error(`${failures.length} layer(s) could not be traced into production contours. Re-upload artwork with CORS-readable pixels or convert to editable text/shapes.`);
   if(!regions.length)throw new Error("No production contours were produced from the design.");
-  return{regions,fallbacks:[],threadLabels,vectorDiagnostics,vectorReports};
+  return{regions,fallbacks:[],threadLabels,vectorDiagnostics,vectorReports,vectorSimilarities,ocrReports};
 }
 
 type ColorLayer={threadId:string;rings:EmbroideryPoint[][];units?:"px"|"mm"};
@@ -102,6 +104,8 @@ async function extractImageLayersServer(
   mlPrep:boolean,
   diagnostics:{code:string;message:string;severity:string}[],
   reports:VectorPrepMetadata[],
+  similarities:VectorSimilarityReport[],
+  ocrReports:{elementId:string;report:OCRReport}[],
 ):Promise<ColorLayer[]>{
   const placement={
     canvasWidth:view.canvasWidth,
@@ -112,35 +116,25 @@ async function extractImageLayersServer(
   };
   if(mode==="silhouette"||element.color){
     const blob=await renderElementPNG(element);
-    const contours=await api.productionVectorize(blob,{method,mlPrep,placement});
-    pushVectorResult(diagnostics,reports,contours);
+    const contours=await api.productionVectorize(blob,{method,mlPrep,placement,includeProof:true});
+    contours.ocr=await refineOCRFontMatch(element,contours.ocr);
+    pushVectorResult(diagnostics,reports,similarities,ocrReports,element.id,contours);
     return[{threadId:element.color||"#222222",rings:contours.rings,units:"mm"}];
   }
-  const {width,height,data,scale}=await rasterizeElement(element);
-  const palette=buildPalette(data,width,height,MAX_IMAGE_THREADS);
-  if(!palette.length)return[];
-  const labels=assignPixels(data,width,height,palette);
-  const layers:ColorLayer[]=[];
-  for(let c=0;c<palette.length;c++){
-    const mask=new Uint8Array(width*height);
-    let count=0;
-    for(let i=0;i<mask.length;i++)if(labels[i]===c){mask[i]=1;count++}
-    if(count<8)continue;
-    const blob=await maskToPNG(mask,width,height);
-    // Rings can be supersampled server-side; normalize back to the submitted
-    // mask before mapping into element-local pixels.
-    const contours=await api.productionVectorize(blob,{method,mlPrep});
-    pushVectorResult(diagnostics,reports,contours);
-    const traceScaleX=contours.widthPx/width,traceScaleY=contours.heightPx/height;
-    const rings=contours.rings.map(r=>r.map(p=>({x:p.x/traceScaleX/scale,y:p.y/traceScaleY/scale})));
-    layers.push({threadId:rgbHex(palette[c]),rings,units:"px"});
-  }
-  return layers;
+  const blob=await renderElementPNG(element);
+  const separated=await api.productionVectorizeColor(blob,{method,mlPrep,placement,maxColors:MAX_IMAGE_THREADS,includeProof:true});
+  separated.ocr=await refineOCRFontMatch(element,separated.ocr);
+  for(const diagnostic of separated.diagnostics??[])diagnostics.push(diagnostic);
+  if(separated.ocr?.attempted&&!ocrReports.some(item=>item.elementId===element.id&&item.report.text===separated.ocr.text))ocrReports.push({elementId:element.id,report:separated.ocr});
+  for(const layer of separated.layers)pushVectorResult(diagnostics,reports,similarities,ocrReports,element.id,layer.contours);
+  return separated.layers.map(layer=>({threadId:layer.color,rings:layer.contours.rings,units:"mm"}));
 }
 
-function pushVectorResult(out:{code:string;message:string;severity:string}[],reports:VectorPrepMetadata[],contours:VectorContourSet){
+function pushVectorResult(out:{code:string;message:string;severity:string}[],reports:VectorPrepMetadata[],similarities:VectorSimilarityReport[],ocrReports:{elementId:string;report:OCRReport}[],elementId:string,contours:VectorContourSet){
   for(const d of contours.diagnostics??[])out.push({code:d.code,message:d.message,severity:d.severity});
   if(contours.prep&&!reports.some(report=>report.profile===contours.prep.profile&&report.inputWidthPx===contours.prep.inputWidthPx&&report.inputHeightPx===contours.prep.inputHeightPx))reports.push(contours.prep);
+  if(contours.similarity&&!similarities.some(report=>report.proofPngBase64===contours.similarity.proofPngBase64&&report.score===contours.similarity.score))similarities.push(contours.similarity);
+  if(contours.ocr?.attempted&&!ocrReports.some(item=>item.elementId===elementId&&item.report.text===contours.ocr.text&&item.report.confidence===contours.ocr.confidence))ocrReports.push({elementId,report:contours.ocr});
 }
 
 /** Editable text stays on the glyph/canvas tracer (not a production fallback for images). */
@@ -178,86 +172,53 @@ async function renderElementPNG(element:DigitizerElement):Promise<Blob>{
   return blob;
 }
 
-async function maskToPNG(mask:Uint8Array,w:number,h:number):Promise<Blob>{
-  const canvas=document.createElement("canvas");
-  canvas.width=w;canvas.height=h;
-  const ctx=canvas.getContext("2d");
-  if(!ctx)throw new Error("canvas unavailable");
-  const image=ctx.createImageData(w,h);
-  for(let i=0;i<mask.length;i++){
-    const on=mask[i]===1;
-    const o=i*4;
-    image.data[o]=0;image.data[o+1]=0;image.data[o+2]=0;image.data[o+3]=on?255:0;
+async function refineOCRFontMatch(element:DigitizerElement,report:OCRReport):Promise<OCRReport>{
+  if(!report?.attempted||!report.text?.trim())return report;
+  const {width,height,data}=await rasterizeElement(element);
+  const source=foregroundMask(data,width,height);
+  const bounds=maskBounds(source,width,height);
+  if(!bounds)return report;
+  const families=["Arial","Georgia","Verdana","Trebuchet MS","Courier New","Impact","Times New Roman"];
+  const candidates:{family:string;confidence:number;reason:string;weight:number}[]=[];
+  for(const family of families)for(const weight of [400,700,900]){
+    const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});if(!ctx)continue;
+    ctx.fillStyle="#000";ctx.textAlign="center";ctx.textBaseline="middle";
+    const lines=report.text.split("\n"),lineBox=Math.max(1,bounds.height/lines.length);
+    let fontSize=lineBox*.9;
+    ctx.font=`${weight} ${fontSize}px ${family}`;
+    const widest=Math.max(1,...lines.map(line=>ctx.measureText(line).width));
+    fontSize*=Math.min(1,bounds.width/widest);
+    ctx.font=`${weight} ${Math.max(2,fontSize)}px ${family}`;
+    lines.forEach((line,index)=>ctx.fillText(line,bounds.x+bounds.width/2,bounds.y+lineBox*(index+.5)));
+    const candidateData=ctx.getImageData(0,0,width,height).data;
+    const candidate=new Uint8Array(width*height);
+    for(let i=0;i<candidate.length;i++)candidate[i]=candidateData[i*4+3]>=ALPHA_CUTOFF?1:0;
+    const score=maskIoU(source,candidate);
+    candidates.push({family,weight,confidence:Number(score.toFixed(3)),reason:`measured raster-shape match at weight ${weight}`});
   }
-  ctx.putImageData(image,0,0);
-  const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/png"));
-  if(!blob)throw new Error("could not encode mask PNG for vectorize");
-  return blob;
+  candidates.sort((a,b)=>b.confidence-a.confidence);
+  const best=candidates[0];
+  return{...report,fontCandidates:candidates.slice(0,5),editableRebuildRecommended:report.confidence>=88&&Boolean(best&&best.confidence>=.42)};
 }
 
-type RGB={r:number;g:number;b:number};
-
-function buildPalette(data:Uint8ClampedArray,w:number,h:number,maxColors:number):RGB[]{
-  // Popularity quantize: bucket RGB, keep the largest opaque buckets, then merge leftovers.
-  const buckets=new Map<number, {rgb:RGB;count:number}>();
-  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
-    const i=(y*w+x)*4;
-    if(data[i+3]<ALPHA_CUTOFF)continue;
-    const r=data[i],g=data[i+1],b=data[i+2];
-    // Skip near-white fluff often left after soft edges.
-    if(r>245&&g>245&&b>245)continue;
-    const key=((r>>4)<<8)|((g>>4)<<4)|(b>>4);
-    const existing=buckets.get(key);
-    if(existing){
-      existing.count++;
-      existing.rgb.r+=r;existing.rgb.g+=g;existing.rgb.b+=b;
-    }else{
-      buckets.set(key,{rgb:{r,g,b},count:1});
-    }
-  }
-  const ranked=[...buckets.values()].map(item=>({
-    rgb:{r:item.rgb.r/item.count,g:item.rgb.g/item.count,b:item.rgb.b/item.count},
-    count:item.count,
-  })).sort((a,b)=>b.count-a.count);
-  if(!ranked.length)return[];
-  const palette=ranked.slice(0,maxColors).map(item=>({r:Math.round(item.rgb.r),g:Math.round(item.rgb.g),b:Math.round(item.rgb.b)}));
-  return mergeCloseColors(palette,28);
+function foregroundMask(data:Uint8ClampedArray,width:number,height:number){
+  const mask=new Uint8Array(width*height),hasTransparency=(()=>{for(let i=3;i<data.length;i+=4)if(data[i]<245)return true;return false})();
+  if(hasTransparency){for(let i=0;i<mask.length;i++)mask[i]=data[i*4+3]>=ALPHA_CUTOFF?1:0;return mask}
+  const corners=[[0,0],[width-1,0],[0,height-1],[width-1,height-1]],background={r:0,g:0,b:0};
+  for(const [x,y] of corners){const i=(y*width+x)*4;background.r+=data[i];background.g+=data[i+1];background.b+=data[i+2]}
+  background.r/=4;background.g/=4;background.b/=4;
+  for(let i=0;i<mask.length;i++){const o=i*4,dr=data[o]-background.r,dg=data[o+1]-background.g,db=data[o+2]-background.b;mask[i]=Math.sqrt(dr*dr+dg*dg+db*db)>=24?1:0}
+  return mask;
 }
 
-function mergeCloseColors(palette:RGB[],threshold:number):RGB[]{
-  const out:RGB[]=[];
-  for(const color of palette){
-    const near=out.find(existing=>colorDistance(existing,color)<threshold);
-    if(!near)out.push(color);
-  }
-  return out.length?out:palette.slice(0,1);
+function maskBounds(mask:Uint8Array,width:number,height:number){
+  let minX=width,minY=height,maxX=-1,maxY=-1;
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++)if(mask[y*width+x]){minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y)}
+  return maxX<minX?null:{x:minX,y:minY,width:maxX-minX+1,height:maxY-minY+1};
 }
 
-function assignPixels(data:Uint8ClampedArray,w:number,h:number,palette:RGB[]):Int8Array{
-  const labels=new Int8Array(w*h).fill(-1);
-  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
-    const i=(y*w+x)*4;
-    if(data[i+3]<ALPHA_CUTOFF)continue;
-    const pixel={r:data[i],g:data[i+1],b:data[i+2]};
-    if(pixel.r>245&&pixel.g>245&&pixel.b>245)continue;
-    let best=0,bestDist=Infinity;
-    for(let c=0;c<palette.length;c++){
-      const dist=colorDistance(pixel,palette[c]);
-      if(dist<bestDist){bestDist=dist;best=c}
-    }
-    labels[y*w+x]=best;
-  }
-  return labels;
-}
-
-function colorDistance(a:RGB,b:RGB){
-  const dr=a.r-b.r,dg=a.g-b.g,db=a.b-b.b;
-  return Math.sqrt(dr*dr+dg*dg+db*db);
-}
-
-function rgbHex(c:RGB){
-  return `#${[c.r,c.g,c.b].map(v=>Math.max(0,Math.min(255,v)).toString(16).padStart(2,"0")).join("")}`;
-}
+function maskIoU(a:Uint8Array,b:Uint8Array){let intersection=0,union=0;for(let i=0;i<a.length;i++){if(a[i]&&b[i])intersection++;if(a[i]||b[i])union++}return union?intersection/union:0}
 
 function renderText(ctx:CanvasRenderingContext2D,e:DigitizerElement){
   ctx.fillStyle=e.color||"#000";

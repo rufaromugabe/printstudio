@@ -3,7 +3,8 @@ import { digitizeElements, DigitizerElement, DigitizerView } from "./embroidery-
 
 type ExportElement=DigitizerElement&{assetId?:string;sourceWidth?:number;sourceHeight?:number;textAlign?:"left"|"center"|"right";lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean};
 export type ProductionMethod="DTF"|"Vinyl"|"Screen print"|"Sublimation";
-export type ProductionResult={method:ProductionMethod;blob:Blob;fileName:string;mime:string;previewUrl:string;summary:string;warnings:string[];widthMM:number;heightMM:number;pixelWidth?:number;pixelHeight?:number;sha256?:string;renderer?:"server"|"browser";vinylReview?:VinylReview;vinylBlocked?:boolean};
+export type OCRSuggestion={elementId:string;text:string;confidence:number;fontFamily:string;fontWeight:number;fontCandidates:{family:string;confidence:number;reason:string;weight?:number}[];recommended:boolean};
+export type ProductionResult={method:ProductionMethod;blob:Blob;fileName:string;mime:string;previewUrl:string;summary:string;warnings:string[];widthMM:number;heightMM:number;pixelWidth?:number;pixelHeight?:number;sha256?:string;renderer?:"server"|"browser";vinylReview?:VinylReview;vinylBlocked?:boolean;qaProofs?:string[];ocrSuggestions?:OCRSuggestion[]};
 export type VinylExportOptions={mirror?:boolean;materialClass?:VinylMaterialClass|string;advancedVectorize?:boolean};
 export type ContourExportOptions={mirror?:boolean;materialClass?:VinylMaterialClass|string;advancedVectorize?:boolean};
 
@@ -68,6 +69,11 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     const upscale=report.upscaleFactor>1?` · ${report.upscaleFactor}× edge supersampling`:"";
     warnings.push(`Auto polish: detected ${detected}${background}${upscale} · ${report.profile} · quality ${report.qualityScore}/100.`);
   }
+  const similarityReports=traced.vectorSimilarities??[];
+  if(similarityReports.length){const weakest=similarityReports.reduce((lowest,current)=>current.score<lowest.score?current:lowest);warnings.push(`Visual QA: ${similarityReports.length} traced layer${similarityReports.length===1?"":"s"} checked · weakest ${weakest.score}/100 (${weakest.status}) · ${(weakest.intersectionOverUnion*100).toFixed(1)}% overlap · ${(weakest.edgeF1*100).toFixed(1)}% edge fidelity.`)}
+  const qaProofs=(traced.vectorSimilarities??[]).map(report=>report.proofPngBase64).filter((proof):proof is string=>Boolean(proof));
+  const ocrSuggestions:OCRSuggestion[]=(traced.ocrReports??[]).filter(item=>Boolean(item.report.text)).map(item=>({elementId:item.elementId,text:item.report.text!,confidence:item.report.confidence,fontFamily:item.report.fontCandidates?.[0]?.family??"Arial",fontWeight:item.report.fontCandidates?.[0]?.weight??400,fontCandidates:item.report.fontCandidates??[],recommended:item.report.editableRebuildRecommended}));
+  for(const suggestion of ocrSuggestions)warnings.push(`OCR: “${suggestion.text.replace(/\s+/g," ").slice(0,80)}” at ${suggestion.confidence.toFixed(1)}% confidence · font candidate ${suggestion.fontFamily}. Confirm before rebuilding editable text.`);
   if(method==="Vinyl"){
     if(!capabilities?.polygonBoolean)throw new Error("Vinyl cut paths require the Clipper2 production backend. Rebuild/deploy the API with -tags clipper2 — approximate contour exports are disabled.");
     const exteriorCount=traced.regions.length;
@@ -91,7 +97,7 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
     const blob=new Blob([svg],{type:"image/svg+xml"});
     const sha256=await hashBlob(blob);
     warnings.push(`Sized to cut contours (${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm), not the full print area.`);
-    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · ${reviewResult.profile.label} · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${cleaned.length} contours · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server",vinylReview:reviewResult.review,vinylBlocked};
+    return{method,blob,fileName:`${clean}-vinyl-${mirrorVinyl?"mirrored":"normal"}.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Cut-ready SVG · ${reviewResult.profile.label} · Clipper2 cleaned · ${mirrorVinyl?"mirrored for heat transfer":"not mirrored"} · ${cleaned.length} contours · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server",vinylReview:reviewResult.review,vinylBlocked,qaProofs,ocrSuggestions};
   }
   const colors=[...new Set(traced.regions.map(r=>r.threadId))];
   if(colors.length>8)warnings.push(`${colors.length} colours create ${colors.length} screen separations; consider reducing the palette.`);
@@ -111,7 +117,7 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
   const svg=svgEnvelope(framed.widthMM,framed.heightMM,groups);const blob=new Blob([svg],{type:"image/svg+xml"});
   const sha256=await hashBlob(blob);
   warnings.push(`Sized to inked artwork (${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm), not the full print area.`);
-  return{method,blob,fileName:`${clean}-screen-separations.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Layered screen-print SVG · ${colors.length} ink separation${colors.length===1?"":"s"} · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server"};
+  return{method,blob,fileName:`${clean}-screen-separations.svg`,mime:"image/svg+xml",previewUrl:URL.createObjectURL(blob),summary:`Layered screen-print SVG · ${colors.length} ink separation${colors.length===1?"":"s"} · ${framed.widthMM.toFixed(1)} × ${framed.heightMM.toFixed(1)} mm`,warnings,widthMM:framed.widthMM,heightMM:framed.heightMM,sha256,renderer:"server",qaProofs,ocrSuggestions};
 }
 
 async function cleanVinylPaths(ringsList:{x:number;y:number}[][][],view:DigitizerView):Promise<PolygonPaths>{

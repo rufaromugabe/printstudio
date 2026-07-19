@@ -17,12 +17,14 @@ type TraceOptions struct {
 	TurnPolicy   string
 }
 
-type NativeTools struct{ Vips, Potrace string }
+type NativeTools struct{ Vips, Potrace, Tesseract string }
 type Capabilities struct {
 	ICC             bool                `json:"icc"`
 	VectorTrace     bool                `json:"vectorTrace"`
 	VipsPath        string              `json:"vipsPath"`
 	PotracePath     string              `json:"potracePath"`
+	OCR             bool                `json:"ocr"`
+	TesseractPath   string              `json:"tesseractPath"`
 	PolygonBoolean  bool                `json:"polygonBoolean"`
 	MaxRenderPixels int64               `json:"maxRenderPixels"`
 	ScreeningModes  []string            `json:"screeningModes"`
@@ -41,11 +43,12 @@ type Capabilities struct {
 func (n NativeTools) Probe() Capabilities {
 	v := resolve(n.Vips, "vips")
 	p := resolve(n.Potrace, "potrace")
+	t := resolve(n.Tesseract, "tesseract")
 	polygon := Clipper2Available()
 	icc := v != ""
 	trace := p != ""
 	return Capabilities{
-		ICC: icc, VectorTrace: trace, VipsPath: v, PotracePath: p, PolygonBoolean: polygon,
+		ICC: icc, VectorTrace: trace, VipsPath: v, PotracePath: p, OCR: t != "", TesseractPath: t, PolygonBoolean: polygon,
 		ScreeningModes:  []string{string(ScreeningAM), string(ScreeningFM)},
 		TrapPresets:     TrapPresets(),
 		NamedInks:       DefaultNamedInks(),

@@ -30,16 +30,18 @@ type VectorPoint struct {
 
 // VectorContourSet is the canonical IR consumed by vinyl/embroidery/screen.
 type VectorContourSet struct {
-	Rings       [][]VectorPoint    `json:"rings"`
-	SourceHash  string             `json:"sourceHash"`
-	Tracer      string             `json:"tracer"`
-	WidthPx     int                `json:"widthPx"`
-	HeightPx    int                `json:"heightPx"`
-	PathCount   int                `json:"pathCount"`
-	MinFeature  float64            `json:"minFeatureMm"`
-	Units       string             `json:"units"` // "px" or "mm"
-	Prep        VectorPrepMetadata `json:"prep"`
-	Diagnostics []VectorDiagnostic `json:"diagnostics,omitempty"`
+	Rings       [][]VectorPoint        `json:"rings"`
+	SourceHash  string                 `json:"sourceHash"`
+	Tracer      string                 `json:"tracer"`
+	WidthPx     int                    `json:"widthPx"`
+	HeightPx    int                    `json:"heightPx"`
+	PathCount   int                    `json:"pathCount"`
+	MinFeature  float64                `json:"minFeatureMm"`
+	Units       string                 `json:"units"` // "px" or "mm"
+	Prep        VectorPrepMetadata     `json:"prep"`
+	Similarity  VectorSimilarityReport `json:"similarity"`
+	OCR         OCRReport              `json:"ocr"`
+	Diagnostics []VectorDiagnostic     `json:"diagnostics,omitempty"`
 }
 
 type VectorDiagnostic struct {
@@ -62,13 +64,15 @@ type VectorizePlacement struct {
 }
 
 type VectorizeOptions struct {
-	Method      string // vinyl|embroidery|screen
-	AlphaCutoff uint8
-	MLPrep      bool
-	Placement   *VectorizePlacement
-	Tools       NativeTools
-	Prep        ImagePrep // optional; nil uses passthrough
-	MaxPaths    int
+	Method       string // vinyl|embroidery|screen
+	AlphaCutoff  uint8
+	MLPrep       bool
+	Placement    *VectorizePlacement
+	Tools        NativeTools
+	Prep         ImagePrep // optional; nil uses passthrough
+	MaxPaths     int
+	IncludeProof bool
+	EnableOCR    bool
 }
 
 // ImagePrep is the ML/cleanup stage before Potrace.
@@ -186,6 +190,12 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
 		return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 	}
+	similarity, similarityNotes := EvaluateVectorSimilarity(traceMask, rings, prepMeta.ContentKind, opt.IncludeProof)
+	ocr := OCRReport{}
+	if opt.EnableOCR && prepMeta.ContentKind == ContentTextLike {
+		ocrMask := sampleAlphaMask(traceMask, w, h)
+		ocr = opt.Tools.RecognizeRasterText(ctx, binaryOCRImage(ocrMask, w, h))
+	}
 
 	out := &VectorContourSet{
 		Rings:      rings,
@@ -196,13 +206,19 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		PathCount:  len(rings),
 		Units:      "px",
 		Prep:       prepMeta,
+		Similarity: similarity,
+		OCR:        ocr,
 	}
 	if prepMeta.ContentKind == ContentPhoto {
 		out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "warning", Code: "PHOTO_TRACE_REVIEW", Message: "continuous-tone artwork was detected; review the simplified vector proof or keep it raster for DTF/sublimation"})
 	}
 	out.Diagnostics = append(out.Diagnostics, noiseNotes...)
 	out.Diagnostics = append(out.Diagnostics, QualityGate(rings, "px")...)
-	out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
+	out.Diagnostics = append(out.Diagnostics, similarityNotes...)
+	if ocr.Attempted && ocr.Text != "" && ocr.Confidence < 70 {
+		out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "warning", Code: "OCR_REVIEW", Message: "raster lettering OCR confidence is low; confirm the recognized characters before rebuilding editable text"})
+	}
+	updateVectorQualityScore(out)
 	if HasVectorErrors(out.Diagnostics) {
 		return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 	}
@@ -210,7 +226,7 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 	if opt.Placement != nil {
 		if err := validateVectorPlacement(*opt.Placement); err != nil {
 			out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "error", Code: "INVALID_PLACEMENT", Message: err.Error()})
-			out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
+			updateVectorQualityScore(out)
 			return out, fmt.Errorf("vectorize failed quality gates: %s", err)
 		}
 		mapped := make([][]VectorPoint, len(rings))
@@ -231,7 +247,7 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 			out.Units = "mm"
 			out.Diagnostics = append(out.Diagnostics, mmNoise...)
 			out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "error", Code: "NO_CONTOURS", Message: "no contours remained after removing sub-threshold noise"})
-			out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
+			updateVectorQualityScore(out)
 			return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 		}
 		out.Rings = mapped
@@ -240,15 +256,26 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		out.MinFeature = minFeatureSize(mapped)
 		out.Diagnostics = append(out.Diagnostics, mmNoise...)
 		out.Diagnostics = append(out.Diagnostics, QualityGateForMethod(mapped, "mm", opt.Method)...)
-		out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
+		updateVectorQualityScore(out)
 		if HasVectorErrors(out.Diagnostics) {
 			return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 		}
 	} else {
 		out.MinFeature = minFeatureSize(rings)
 	}
-	out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
+	updateVectorQualityScore(out)
 	return out, nil
+}
+
+func updateVectorQualityScore(out *VectorContourSet) {
+	if out == nil {
+		return
+	}
+	score := vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
+	if out.Similarity.Score > 0 {
+		score = minInt(score, out.Similarity.Score)
+	}
+	out.Prep.QualityScore = score
 }
 
 func toPolygonPaths(rings [][]VectorPoint) PolygonPaths {

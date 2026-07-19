@@ -14,7 +14,7 @@ RUN mkdir -p /out/lib \
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates libvips42 libvips-tools libstdc++6 potrace \
+    bash ca-certificates libvips42 libvips-tools libstdc++6 potrace tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
 COPY --from=build /out/api /usr/local/bin/api
@@ -23,6 +23,7 @@ ENV PATH="/usr/local/bin:${PATH}" \
     LD_LIBRARY_PATH="/usr/local/bin/lib" \
     VIPS_BIN=vips \
     POTRACE_BIN=potrace \
+    TESSERACT_BIN=tesseract \
     ICC_PROFILE_DIR=/var/printstudio/icc \
     REQUIRE_PRODUCTION_NATIVES=true \
     REQUIRE_PRODUCTION_APPROVAL=true \

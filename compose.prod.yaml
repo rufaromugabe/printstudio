@@ -10,6 +10,7 @@ services:
       WEB_ORIGIN: ${WEB_ORIGIN:-https://studio.example.com}
       VIPS_BIN: ${VIPS_BIN:-vips}
       POTRACE_BIN: ${POTRACE_BIN:-potrace}
+      TESSERACT_BIN: ${TESSERACT_BIN:-tesseract}
       ICC_PROFILE_DIR: /var/printstudio/icc
       REQUIRE_PRODUCTION_NATIVES: "true"
       REQUIRE_PRODUCTION_APPROVAL: "true"

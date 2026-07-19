@@ -27,7 +27,7 @@ import (
 )
 
 func productionCapabilities(w http.ResponseWriter, _ *http.Request) {
-	tools := prod.NativeTools{Vips: os.Getenv("VIPS_BIN"), Potrace: os.Getenv("POTRACE_BIN")}
+	tools := prod.NativeTools{Vips: os.Getenv("VIPS_BIN"), Potrace: os.Getenv("POTRACE_BIN"), Tesseract: os.Getenv("TESSERACT_BIN")}
 	capabilities := tools.Probe()
 	capabilities.MaxRenderPixels = productionMaxPixels()
 	capabilities.ICCProfiles = iccProfiles != nil
@@ -525,7 +525,7 @@ func productionOffset(w http.ResponseWriter, r *http.Request) {
 
 func productionVectorizeHandler(a *API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tools := prod.NativeTools{Vips: os.Getenv("VIPS_BIN"), Potrace: os.Getenv("POTRACE_BIN")}
+		tools := prod.NativeTools{Vips: os.Getenv("VIPS_BIN"), Potrace: os.Getenv("POTRACE_BIN"), Tesseract: os.Getenv("TESSERACT_BIN")}
 		if !tools.Probe().VectorTrace {
 			problem(w, http.StatusNotImplemented, "potrace is unavailable — advanced vectorize requires POTRACE_BIN or potrace on PATH")
 			return
@@ -535,14 +535,30 @@ func productionVectorizeHandler(a *API) http.HandlerFunc {
 			return
 		}
 		opt := prod.VectorizeOptions{
-			Method:      method,
-			AlphaCutoff: alpha,
-			MLPrep:      mlPrep,
-			Placement:   placement,
-			Tools:       tools,
+			Method:       method,
+			AlphaCutoff:  alpha,
+			MLPrep:       mlPrep,
+			Placement:    placement,
+			Tools:        tools,
+			IncludeProof: strings.EqualFold(r.URL.Query().Get("proof"), "true") || r.URL.Query().Get("proof") == "1",
+			EnableOCR:    !strings.EqualFold(r.URL.Query().Get("ocr"), "false") && r.URL.Query().Get("ocr") != "0",
 		}
 		if mlPrep {
 			opt.Prep = ai.NewGatewayFromEnv()
+		}
+		if strings.EqualFold(r.URL.Query().Get("mode"), "color") || strings.EqualFold(r.URL.Query().Get("mode"), "colour") {
+			maxColors := integerQuery(r, "maxColors", 8)
+			result, err := prod.VectorizeColor(r.Context(), img, opt, maxColors)
+			if err != nil {
+				if result != nil {
+					write(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "separations": result})
+					return
+				}
+				problem(w, http.StatusUnprocessableEntity, err.Error())
+				return
+			}
+			write(w, http.StatusOK, result)
+			return
 		}
 		set, err := prod.Vectorize(r.Context(), img, opt)
 		if err != nil {
@@ -586,12 +602,12 @@ func decodeVectorizeRequest(w http.ResponseWriter, r *http.Request, a *API) (ima
 	ct := strings.ToLower(r.Header.Get("Content-Type"))
 	if strings.Contains(ct, "application/json") {
 		var in struct {
-			AssetID      string                  `json:"assetId"`
-			ImageBase64  string                  `json:"imageBase64"`
-			Method       string                  `json:"method"`
-			MLPrep       bool                    `json:"mlPrep"`
-			AlphaCutoff  uint8                   `json:"alphaCutoff"`
-			Placement    *prod.VectorizePlacement `json:"placement"`
+			AssetID     string                   `json:"assetId"`
+			ImageBase64 string                   `json:"imageBase64"`
+			Method      string                   `json:"method"`
+			MLPrep      bool                     `json:"mlPrep"`
+			AlphaCutoff uint8                    `json:"alphaCutoff"`
+			Placement   *prod.VectorizePlacement `json:"placement"`
 		}
 		if decode(w, r, &in) != nil {
 			return nil, nil, "", false, 0, false

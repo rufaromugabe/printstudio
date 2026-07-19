@@ -30,6 +30,8 @@ Current output:
 - Multiple disconnected contours
 - ViewBox, weed box and declared size fitted to cut contours (plus margin)
 - Server `POST /v1/vinyl/review` policy: material-aware warn/reject feature thresholds, counter-risk warnings, and a review scorecard
+- Raster-to-vector similarity overlay with hard rejection for lost lettering counters or severe contour drift
+- Optional Tesseract recognition with explicit, reversible conversion to editable text
 - Cut SVG / PDF / TIFF / ZIP download blocked when review decision is `blocked` or hard-stop diagnostics are present
 - Clipper2 union cleanup is required; exports fail closed when `polygonBoolean` is unavailable
 
@@ -51,6 +53,7 @@ Current output:
 - Physical millimetre dimensions fitted to inked separations (plus margin)
 - Solid vector silhouettes for traced elements
 - Colour-count warning above eight inks
+- Server-side CIE Lab palette clustering with mean/P95 ΔE00 reconstruction checks
 - Explicit warning when raster artwork would require halftone separation
 - Server production ZIP with continuous-tone C, M, Y and K masks
 - Deterministic 45-LPI AM screens using C=15°, M=75°, Y=0° and K=45° defaults
