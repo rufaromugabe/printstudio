@@ -62,6 +62,12 @@ export async function prepareProductionExport(method:ProductionMethod,name:strin
   for(const d of traced.vectorDiagnostics??[]){
     if(d.severity==="error"||d.severity==="warning")warnings.push(`Vectorize ${d.severity}: ${d.message}`);
   }
+  for(const report of traced.vectorReports??[]){
+    const detected=report.contentKind==="text-like"?"raster text / lettering":report.contentKind==="flat-art"?"logo / flat artwork":"continuous-tone artwork";
+    const background=report.backgroundRemoved?" · background isolated":"";
+    const upscale=report.upscaleFactor>1?` · ${report.upscaleFactor}× edge supersampling`:"";
+    warnings.push(`Auto polish: detected ${detected}${background}${upscale} · ${report.profile} · quality ${report.qualityScore}/100.`);
+  }
   if(method==="Vinyl"){
     if(!capabilities?.polygonBoolean)throw new Error("Vinyl cut paths require the Clipper2 production backend. Rebuild/deploy the API with -tags clipper2 — approximate contour exports are disabled.");
     const exteriorCount=traced.regions.length;

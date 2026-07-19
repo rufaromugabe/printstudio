@@ -1,10 +1,10 @@
-import { api, EmbroideryKind, EmbroideryPoint, EmbroideryRegion, VectorContourSet } from "./api";
+import { api, EmbroideryKind, EmbroideryPoint, EmbroideryRegion, VectorContourSet, VectorPrepMetadata } from "./api";
 import { nearestThread, ThreadBrand } from "./thread-charts";
 
 export type DigitizerEmbroideryKind="auto"|EmbroideryKind;
 export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:DigitizerEmbroideryKind;embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number;embroideryFoamHeightMm?:2|3;assetId?:string};
 export type DigitizerView={canvasWidth:number;canvasHeight:number;physicalWidthMm:number;physicalHeightMm:number};
-export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>;vectorDiagnostics?:{code:string;message:string;severity:string}[]};
+export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>;vectorDiagnostics?:{code:string;message:string;severity:string}[];vectorReports?:VectorPrepMetadata[]};
 
 const MAX_IMAGE_THREADS=8;
 const ALPHA_CUTOFF=32;
@@ -22,10 +22,11 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
   const method=(options?.method??"embroidery") as "vinyl"|"embroidery"|"screen";
   const mlPrep=options?.mlPrep??true;
   const vectorDiagnostics:{code:string;message:string;severity:string}[]=[];
+  const vectorReports:VectorPrepMetadata[]=[];
   for(const element of elements){
     try{
       const layers=element.type==="image"
-        ? await extractImageLayersServer(element,view,mode,method,mlPrep,vectorDiagnostics)
+        ? await extractImageLayersServer(element,view,mode,method,mlPrep,vectorDiagnostics,vectorReports)
         : await extractTextLayers(element);
       if(!layers.length){failures.push(element.id);continue}
       for(const [layerIndex,layer] of layers.entries()){
@@ -88,7 +89,7 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
   }
   if(failures.length)throw new Error(`${failures.length} layer(s) could not be traced into production contours. Re-upload artwork with CORS-readable pixels or convert to editable text/shapes.`);
   if(!regions.length)throw new Error("No production contours were produced from the design.");
-  return{regions,fallbacks:[],threadLabels,vectorDiagnostics};
+  return{regions,fallbacks:[],threadLabels,vectorDiagnostics,vectorReports};
 }
 
 type ColorLayer={threadId:string;rings:EmbroideryPoint[][];units?:"px"|"mm"};
@@ -100,6 +101,7 @@ async function extractImageLayersServer(
   method:"vinyl"|"embroidery"|"screen",
   mlPrep:boolean,
   diagnostics:{code:string;message:string;severity:string}[],
+  reports:VectorPrepMetadata[],
 ):Promise<ColorLayer[]>{
   const placement={
     canvasWidth:view.canvasWidth,
@@ -111,7 +113,7 @@ async function extractImageLayersServer(
   if(mode==="silhouette"||element.color){
     const blob=await renderElementPNG(element);
     const contours=await api.productionVectorize(blob,{method,mlPrep,placement});
-    pushDiagnostics(diagnostics,contours);
+    pushVectorResult(diagnostics,reports,contours);
     return[{threadId:element.color||"#222222",rings:contours.rings,units:"mm"}];
   }
   const {width,height,data,scale}=await rasterizeElement(element);
@@ -125,17 +127,20 @@ async function extractImageLayersServer(
     for(let i=0;i<mask.length;i++)if(labels[i]===c){mask[i]=1;count++}
     if(count<8)continue;
     const blob=await maskToPNG(mask,width,height);
-    // Rings come back in mask pixel space; map into element-local px then physical mm client-side.
+    // Rings can be supersampled server-side; normalize back to the submitted
+    // mask before mapping into element-local pixels.
     const contours=await api.productionVectorize(blob,{method,mlPrep});
-    pushDiagnostics(diagnostics,contours);
-    const rings=contours.rings.map(r=>r.map(p=>({x:p.x/scale,y:p.y/scale})));
+    pushVectorResult(diagnostics,reports,contours);
+    const traceScaleX=contours.widthPx/width,traceScaleY=contours.heightPx/height;
+    const rings=contours.rings.map(r=>r.map(p=>({x:p.x/traceScaleX/scale,y:p.y/traceScaleY/scale})));
     layers.push({threadId:rgbHex(palette[c]),rings,units:"px"});
   }
   return layers;
 }
 
-function pushDiagnostics(out:{code:string;message:string;severity:string}[],contours:VectorContourSet){
+function pushVectorResult(out:{code:string;message:string;severity:string}[],reports:VectorPrepMetadata[],contours:VectorContourSet){
   for(const d of contours.diagnostics??[])out.push({code:d.code,message:d.message,severity:d.severity});
+  if(contours.prep&&!reports.some(report=>report.profile===contours.prep.profile&&report.inputWidthPx===contours.prep.inputWidthPx&&report.inputHeightPx===contours.prep.inputHeightPx))reports.push(contours.prep);
 }
 
 /** Editable text stays on the glyph/canvas tracer (not a production fallback for images). */

@@ -6,6 +6,8 @@ import (
 	"image/color"
 	"os"
 	"strings"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 const (
@@ -45,7 +47,7 @@ func (StubProvider) Upscale(img image.Image, scale int) (image.Image, error) {
 	if scale <= 1 {
 		return img, nil
 	}
-	return nearestNeighborUpscale(img, scale), nil
+	return reconstructionUpscale(img, scale), nil
 }
 
 // EnvProviderAdapter routes to a configured remote provider name.
@@ -162,16 +164,13 @@ func softAlphaCleanup(img image.Image, cutoff uint8) *image.NRGBA {
 	return out
 }
 
-func nearestNeighborUpscale(img image.Image, scale int) *image.NRGBA {
+func reconstructionUpscale(img image.Image, scale int) *image.NRGBA {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 	out := image.NewNRGBA(image.Rect(0, 0, w*scale, h*scale))
-	for y := 0; y < h*scale; y++ {
-		for x := 0; x < w*scale; x++ {
-			sx := b.Min.X + x/scale
-			sy := b.Min.Y + y/scale
-			out.Set(x, y, img.At(sx, sy))
-		}
-	}
+	// Catmull-Rom avoids the block stair-steps produced by nearest-neighbour
+	// scaling. The deterministic mask stage hardens the resulting edge after it
+	// applies its method-specific threshold.
+	xdraw.CatmullRom.Scale(out, out.Bounds(), img, b, xdraw.Src, nil)
 	return out
 }

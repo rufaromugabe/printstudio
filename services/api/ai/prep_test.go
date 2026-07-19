@@ -35,3 +35,14 @@ func TestStubPrepRemoveBGMarksML(t *testing.T) {
 		t.Fatalf("tracer=%s", tracer)
 	}
 }
+
+func TestStubUpscaleUsesReconstructionFilter(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.SetNRGBA(0, 0, color.NRGBA{A: 255})
+	img.SetNRGBA(1, 0, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	out := reconstructionUpscale(img, 4)
+	middle := color.NRGBAModel.Convert(out.At(3, 0)).(color.NRGBA)
+	if middle.R == 0 || middle.R == 255 {
+		t.Fatalf("expected reconstructed intermediate tone, got %#v", middle)
+	}
+}

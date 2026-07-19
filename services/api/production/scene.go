@@ -258,25 +258,63 @@ func drawRotated(dst *image.NRGBA, src image.Image, cx, cy, dw, dh, degrees floa
 	if srcBounds.Dx() == 0 || srcBounds.Dy() == 0 || dw <= 0 || dh <= 0 {
 		return
 	}
-	scaled := scaleBilinear(src, int(math.Max(1, math.Round(dw))), int(math.Max(1, math.Round(dh))))
+	scaled := scaleProductionArtwork(src, int(math.Max(1, math.Round(dw))), int(math.Max(1, math.Round(dh))))
 	rad := degrees * math.Pi / 180
 	cos, sin := math.Cos(rad), math.Sin(rad)
 	bw, bh := scaled.Bounds().Dx(), scaled.Bounds().Dy()
-	for y := 0; y < bh; y++ {
-		for x := 0; x < bw; x++ {
-			px := float64(x) - float64(bw)/2
-			py := float64(y) - float64(bh)/2
-			dx := int(math.Round(cx + px*cos - py*sin))
-			dy := int(math.Round(cy + px*sin + py*cos))
-			if dx < 0 || dy < 0 || dx >= dst.Bounds().Dx() || dy >= dst.Bounds().Dy() {
+	halfW, halfH := float64(bw)/2, float64(bh)/2
+	extentX := math.Abs(cos)*halfW + math.Abs(sin)*halfH
+	extentY := math.Abs(sin)*halfW + math.Abs(cos)*halfH
+	minX := maxInt(0, int(math.Floor(cx-extentX)))
+	maxX := minInt(dst.Bounds().Dx()-1, int(math.Ceil(cx+extentX)))
+	minY := maxInt(0, int(math.Floor(cy-extentY)))
+	maxY := minInt(dst.Bounds().Dy()-1, int(math.Ceil(cy+extentY)))
+	// Inverse-map every destination pixel. Forward mapping left pinholes at
+	// non-right-angle rotations, which are visible in DTF white underbases.
+	for dy := minY; dy <= maxY; dy++ {
+		for dx := minX; dx <= maxX; dx++ {
+			px := float64(dx) + 0.5 - cx
+			py := float64(dy) + 0.5 - cy
+			sx := px*cos + py*sin + halfW - 0.5
+			sy := -px*sin + py*cos + halfH - 0.5
+			if sx < -0.5 || sy < -0.5 || sx > float64(bw)-0.5 || sy > float64(bh)-0.5 {
 				continue
 			}
-			sc := scaled.NRGBAAt(x, y)
-			if sc.A == 0 {
-				continue
+			sc := sampleNRGBABilinear(scaled, sx, sy)
+			if sc.A != 0 {
+				dst.SetNRGBA(dx, dy, over(dst.NRGBAAt(dx, dy), sc))
 			}
-			dst.SetNRGBA(dx, dy, over(dst.NRGBAAt(dx, dy), sc))
 		}
+	}
+}
+
+func sampleNRGBABilinear(src *image.NRGBA, x, y float64) color.NRGBA {
+	w, h := src.Bounds().Dx(), src.Bounds().Dy()
+	x = math.Max(0, math.Min(float64(w-1), x))
+	y = math.Max(0, math.Min(float64(h-1), y))
+	x0, y0 := int(math.Floor(x)), int(math.Floor(y))
+	x1, y1 := minInt(w-1, x0+1), minInt(h-1, y0+1)
+	fx, fy := x-float64(x0), y-float64(y0)
+	c00, c10 := src.NRGBAAt(x0, y0), src.NRGBAAt(x1, y0)
+	c01, c11 := src.NRGBAAt(x0, y1), src.NRGBAAt(x1, y1)
+	blend := func(a, b, c, d float64) float64 {
+		return (a*(1-fx)+b*fx)*(1-fy) + (c*(1-fx)+d*fx)*fy
+	}
+	a00, a10 := float64(c00.A)/255, float64(c10.A)/255
+	a01, a11 := float64(c01.A)/255, float64(c11.A)/255
+	alpha := blend(a00, a10, a01, a11)
+	if alpha <= 0 {
+		return color.NRGBA{}
+	}
+	premul := func(channel func(color.NRGBA) uint8) uint8 {
+		value := blend(float64(channel(c00))*a00, float64(channel(c10))*a10, float64(channel(c01))*a01, float64(channel(c11))*a11) / alpha
+		return uint8(math.Round(math.Max(0, math.Min(255, value))))
+	}
+	return color.NRGBA{
+		R: premul(func(c color.NRGBA) uint8 { return c.R }),
+		G: premul(func(c color.NRGBA) uint8 { return c.G }),
+		B: premul(func(c color.NRGBA) uint8 { return c.B }),
+		A: uint8(math.Round(alpha * 255)),
 	}
 }
 

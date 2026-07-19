@@ -40,6 +40,19 @@ export type PolygonPoint={x:number;y:number};
 export type PolygonPaths=PolygonPoint[][];
 export type VectorPoint={x:number;y:number};
 export type VectorDiagnostic={severity:"error"|"warning";code:string;message:string};
+export type VectorPrepMetadata={
+  contentKind:"text-like"|"flat-art"|"photo"|string;
+  confidence:number;
+  maskSource:"alpha"|"border-color"|"luminance"|string;
+  inputWidthPx:number;inputHeightPx:number;
+  preparedWidthPx:number;preparedHeightPx:number;
+  upscaleFactor:number;
+  foregroundRatio:number;
+  backgroundRemoved:boolean;
+  profile:string;
+  qualityScore:number;
+  steps:string[];
+};
 export type VectorContourSet={
   rings:VectorPoint[][];
   sourceHash:string;
@@ -49,6 +62,7 @@ export type VectorContourSet={
   pathCount:number;
   minFeatureMm:number;
   units:"px"|"mm"|string;
+  prep:VectorPrepMetadata;
   diagnostics?:VectorDiagnostic[];
 };
 export type VectorizePlacement={

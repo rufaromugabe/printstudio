@@ -608,21 +608,21 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
       <label>Material class<select value={vinylMaterialClass} onChange={e=>{const next=e.target.value as VinylMaterialClass;setVinylMaterialClass(next);setMirrorVinyl(vinylMirrorDefault(next))}}><option value="htv-smooth">HTV smooth (EasyWeed-class)</option><option value="htv-flock">HTV flock</option><option value="htv-glitter">HTV glitter</option><option value="adhesive-permanent">Adhesive permanent (651)</option><option value="adhesive-removable">Adhesive removable (631)</option><option value="adhesive-glitter">Adhesive glitter (851)</option></select></label>
       <p className="hint" style={{marginTop:0}}>{vinylMaterialHint(vinylMaterialClass)}</p>
       <label className="check"><input type="checkbox" checked={mirrorVinyl} onChange={e=>setMirrorVinyl(e.target.checked)}/> Mirror for heat transfer (HTV)</label>
-      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> Advanced vectorize (ML)</label>
-      <p className="hint">Image layers always Potrace on the server. This toggles optional ML prep before trace. Text stays glyph-traced.</p>
+      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> AI cleanup before smart vector polish</label>
+      <p className="hint">Every image is classified as lettering, flat art or a photo, then background-cleaned, edge-supersampled and traced with a vinyl profile. This switch adds the configured AI provider first. Editable text stays glyph-perfect.</p>
     </>}
     {key.includes("screen")&&<>
       <label>Trap preset<select value={screenTrapPreset} onChange={e=>{const id=e.target.value;setScreenTrapPreset(id);if(id.includes("55"))setScreenLpi(55);else if(id.includes("45"))setScreenLpi(45)}}>{screenPresets.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
       <AdjustField label="LPI" value={screenLpi} min={20} max={85} step={1} onChange={setScreenLpi} presets={[{label:"35",value:35},{label:"45",value:45},{label:"55",value:55},{label:"65",value:65}]}/>
       <label>Screening<select value={screenMode} onChange={e=>setScreenMode(e.target.value as"am"|"fm")}><option value="am">AM (dot)</option><option value="fm">FM (stochastic)</option></select></label>
-      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> Advanced vectorize (ML)</label>
-      <p className="hint">Image layers always Potrace on the server; this toggles optional ML prep. Used for screen pack ZIP and halftone processors on export.</p>
+      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> AI cleanup before smart vector polish</label>
+      <p className="hint">Solid separations receive automatic background isolation, edge repair and a screen-specific trace. Continuous-tone artwork stays raster for the screen pack and halftone processors.</p>
     </>}
     {key==="embroidery"&&<>
       <label>Fabric class<select value={embroideryDefaults.fabricClass} onChange={e=>{const fabricClass=e.target.value as EmbroideryFabricClass;const density=fabricDensity(fabricClass);setEmbroideryDefaults({...embroideryDefaults,fabricClass,spacing:density})}}><option value="woven">Stable woven</option><option value="tshirt">T-shirt knit</option><option value="pique">Pique polo</option><option value="fleece">Fleece / jumper</option><option value="performance-knit">Performance knit</option></select></label>
       <p className="hint" style={{marginTop:0}}>Sets density / underlay defaults and review scoring. Sew-out still required.</p>
-      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> Advanced vectorize (ML)</label>
-      <p className="hint" style={{marginTop:0}}>Image layers always Potrace on the server; this toggles optional ML prep. Editable text stays glyph-traced.</p>
+      <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> AI cleanup before smart vector polish</label>
+      <p className="hint" style={{marginTop:0}}>Raster lettering and logos are detected automatically, repaired and traced with stitch-stable settings before digitizing. Editable text stays glyph-traced.</p>
       <label>Stitch family<select value={embroideryDefaults.kind??"auto"} onChange={e=>{const kind=e.target.value as EmbroideryKindOption;setEmbroideryDefaults({...embroideryDefaults,kind,underlay:embroideryHidesUnderlay(kind)?"none":embroideryDefaults.underlay})}}>{EMBROIDERY_KIND_OPTIONS.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select></label>
       {(embroideryDefaults.kind??"auto")==="puff"&&<>
         <label>Foam height<select value={embroideryDefaults.foamHeightMm} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,foamHeightMm:Number(e.target.value)===2?2:3})}><option value={2}>2 mm foam</option><option value={3}>3 mm foam</option></select></label>

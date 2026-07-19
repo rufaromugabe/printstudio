@@ -10,6 +10,8 @@ import (
 	"image/draw"
 	"image/png"
 	"math"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 type ArtifactFile struct {
@@ -197,7 +199,7 @@ func RenderGangSheet(src image.Image, config GangConfig) (*image.NRGBA, []Placem
 	targetH := int(math.Round(config.SourceHMM / 25.4 * config.DPI))
 	var normal image.Image = src
 	if src.Bounds().Dx() != targetW || src.Bounds().Dy() != targetH {
-		normal = scaleBilinear(src, targetW, targetH)
+		normal = scaleProductionArtwork(src, targetW, targetH)
 	}
 	rotated := rotate90(normal)
 	out := image.NewNRGBA(image.Rect(0, 0, width, height))
@@ -213,6 +215,19 @@ func RenderGangSheet(src image.Image, config GangConfig) (*image.NRGBA, []Placem
 		draw.Draw(out, image.Rect(x, y, x+placementW, y+placementH), tile, tile.Bounds().Min, draw.Over)
 	}
 	return out, placements, nil
+}
+
+// scaleProductionArtwork uses a high-quality reconstruction filter for final
+// DTF/sublimation pixels and preserves alpha through x/image's premultiplied
+// compositing path. The bilinear helper remains for deterministic low-level
+// tests and places where a softer two-tap interpolation is specifically wanted.
+func scaleProductionArtwork(src image.Image, width, height int) *image.NRGBA {
+	if width <= 0 || height <= 0 {
+		return image.NewNRGBA(image.Rect(0, 0, 0, 0))
+	}
+	out := image.NewNRGBA(image.Rect(0, 0, width, height))
+	xdraw.CatmullRom.Scale(out, out.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	return out
 }
 
 func rotate90(src image.Image) *image.NRGBA {

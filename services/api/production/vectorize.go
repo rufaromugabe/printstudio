@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -29,14 +30,15 @@ type VectorPoint struct {
 
 // VectorContourSet is the canonical IR consumed by vinyl/embroidery/screen.
 type VectorContourSet struct {
-	Rings       [][]VectorPoint   `json:"rings"`
-	SourceHash  string            `json:"sourceHash"`
-	Tracer      string            `json:"tracer"`
-	WidthPx     int               `json:"widthPx"`
-	HeightPx    int               `json:"heightPx"`
-	PathCount   int               `json:"pathCount"`
-	MinFeature  float64           `json:"minFeatureMm"`
-	Units       string            `json:"units"` // "px" or "mm"
+	Rings       [][]VectorPoint    `json:"rings"`
+	SourceHash  string             `json:"sourceHash"`
+	Tracer      string             `json:"tracer"`
+	WidthPx     int                `json:"widthPx"`
+	HeightPx    int                `json:"heightPx"`
+	PathCount   int                `json:"pathCount"`
+	MinFeature  float64            `json:"minFeatureMm"`
+	Units       string             `json:"units"` // "px" or "mm"
+	Prep        VectorPrepMetadata `json:"prep"`
 	Diagnostics []VectorDiagnostic `json:"diagnostics,omitempty"`
 }
 
@@ -94,6 +96,7 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 	if opt.MaxPaths <= 0 {
 		opt.MaxPaths = MaxVectorPaths
 	}
+	sourceBounds := img.Bounds()
 	prep := opt.Prep
 	if prep == nil {
 		prep = passthroughPrep{}
@@ -106,17 +109,26 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		tracer = TracerPotrace
 	}
 
-	bounds := prepared.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-	if w < 2 || h < 2 {
-		return nil, fmt.Errorf("image is too small to vectorize")
+	traceMask, prepMeta, qualityProfile, err := prepareVectorMask(prepared, opt.Method, opt.AlphaCutoff)
+	if err != nil {
+		return nil, fmt.Errorf("content-aware prep: %w", err)
 	}
+	prepMeta.InputWidthPx = sourceBounds.Dx()
+	prepMeta.InputHeightPx = sourceBounds.Dy()
+	if tracer == TracerMLAssisted {
+		prepMeta.Steps = append([]string{"applied configured AI/provider raster prep"}, prepMeta.Steps...)
+	}
+	bounds := traceMask.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
 
 	var pngBuf bytes.Buffer
-	if err := png.Encode(&pngBuf, prepared); err != nil {
+	if err := png.Encode(&pngBuf, traceMask); err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(pngBuf.Bytes())
+	hasher := sha256.New()
+	_, _ = hasher.Write(pngBuf.Bytes())
+	_, _ = hasher.Write([]byte("\n" + normalizeVectorMethod(opt.Method) + "\n" + qualityProfile.name))
+	sourceHash := hex.EncodeToString(hasher.Sum(nil))
 
 	tmp, err := os.MkdirTemp("", "printstudio-vectorize-*")
 	if err != nil {
@@ -125,10 +137,10 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 	defer os.RemoveAll(tmp)
 	pbmPath := filepath.Join(tmp, "mask.pbm")
 	svgPath := filepath.Join(tmp, "mask.svg")
-	if err := WriteAlphaPBM(prepared, pbmPath, opt.AlphaCutoff); err != nil {
+	if err := WriteAlphaPBM(traceMask, pbmPath, DefaultAlphaCutoff); err != nil {
 		return nil, err
 	}
-	if err := opt.Tools.TracePBM(ctx, pbmPath, svgPath); err != nil {
+	if err := opt.Tools.TracePBMWithOptions(ctx, pbmPath, svgPath, qualityProfile.trace); err != nil {
 		return nil, err
 	}
 	svgBytes, err := os.ReadFile(svgPath)
@@ -153,36 +165,54 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		}
 	}
 	rings = fromPolygonPaths(paths)
+	var polishedPoints int
+	rings, polishedPoints = polishVectorRings(rings, qualityProfile.simplifyTolerance*float64(prepMeta.UpscaleFactor))
+	if polishedPoints > 0 {
+		prepMeta.Steps = append(prepMeta.Steps, fmt.Sprintf("polished %d redundant contour vertices", polishedPoints))
+	}
 
 	var noiseNotes []VectorDiagnostic
 	rings, noiseNotes = dropNoiseRings(rings, rejectFeatureSize("px"))
 	if len(rings) == 0 {
 		out := &VectorContourSet{
-			SourceHash:  hex.EncodeToString(sum[:]),
+			SourceHash:  sourceHash,
 			Tracer:      tracer,
 			WidthPx:     w,
 			HeightPx:    h,
 			Units:       "px",
+			Prep:        prepMeta,
 			Diagnostics: append(noiseNotes, VectorDiagnostic{Severity: "error", Code: "NO_CONTOURS", Message: "no contours remained after removing sub-threshold noise"}),
 		}
+		out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
 		return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 	}
 
 	out := &VectorContourSet{
 		Rings:      rings,
-		SourceHash: hex.EncodeToString(sum[:]),
+		SourceHash: sourceHash,
 		Tracer:     tracer,
 		WidthPx:    w,
 		HeightPx:   h,
 		PathCount:  len(rings),
 		Units:      "px",
+		Prep:       prepMeta,
 	}
-	out.Diagnostics = append(noiseNotes, QualityGate(rings, "px")...)
+	if prepMeta.ContentKind == ContentPhoto {
+		out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "warning", Code: "PHOTO_TRACE_REVIEW", Message: "continuous-tone artwork was detected; review the simplified vector proof or keep it raster for DTF/sublimation"})
+	}
+	out.Diagnostics = append(out.Diagnostics, noiseNotes...)
+	out.Diagnostics = append(out.Diagnostics, QualityGate(rings, "px")...)
+	out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
 	if HasVectorErrors(out.Diagnostics) {
 		return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 	}
 
 	if opt.Placement != nil {
+		if err := validateVectorPlacement(*opt.Placement); err != nil {
+			out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "error", Code: "INVALID_PLACEMENT", Message: err.Error()})
+			out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
+			return out, fmt.Errorf("vectorize failed quality gates: %s", err)
+		}
 		mapped := make([][]VectorPoint, len(rings))
 		for i, ring := range rings {
 			mapped[i] = make([]VectorPoint, len(ring))
@@ -193,13 +223,15 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 			}
 		}
 		var mmNoise []VectorDiagnostic
-		mapped, mmNoise = dropNoiseRings(mapped, rejectFeatureSize("mm"))
+		_, rejectAt := methodFeatureThresholds(opt.Method, "mm")
+		mapped, mmNoise = dropNoiseRings(mapped, rejectAt)
 		if len(mapped) == 0 {
 			out.Rings = nil
 			out.PathCount = 0
 			out.Units = "mm"
 			out.Diagnostics = append(out.Diagnostics, mmNoise...)
 			out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "error", Code: "NO_CONTOURS", Message: "no contours remained after removing sub-threshold noise"})
+			out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
 			return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 		}
 		out.Rings = mapped
@@ -207,13 +239,15 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		out.PathCount = len(mapped)
 		out.MinFeature = minFeatureSize(mapped)
 		out.Diagnostics = append(out.Diagnostics, mmNoise...)
-		out.Diagnostics = append(out.Diagnostics, QualityGate(mapped, "mm")...)
+		out.Diagnostics = append(out.Diagnostics, QualityGateForMethod(mapped, "mm", opt.Method)...)
+		out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
 		if HasVectorErrors(out.Diagnostics) {
 			return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 		}
 	} else {
 		out.MinFeature = minFeatureSize(rings)
 	}
+	out.Prep.QualityScore = vectorQualityScore(out.Prep.ContentKind, out.Diagnostics)
 	return out, nil
 }
 
@@ -260,6 +294,22 @@ func toPhysicalMM(localX, localY float64, p VectorizePlacement) VectorPoint {
 		X: rx/p.CanvasWidth*p.PhysicalWidthMm - p.PhysicalWidthMm/2,
 		Y: ry/p.CanvasHeight*p.PhysicalHeightMm - p.PhysicalHeightMm/2,
 	}
+}
+
+func validateVectorPlacement(p VectorizePlacement) error {
+	values := []float64{p.CanvasWidth, p.CanvasHeight, p.PhysicalWidthMm, p.PhysicalHeightMm, p.X, p.Y, p.W, p.H, p.Rotation}
+	for _, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("placement contains a non-finite value")
+		}
+	}
+	if p.CanvasWidth <= 0 || p.CanvasHeight <= 0 || p.PhysicalWidthMm <= 0 || p.PhysicalHeightMm <= 0 {
+		return fmt.Errorf("placement canvas and physical dimensions must be positive")
+	}
+	if p.W <= 0 || p.H <= 0 {
+		return fmt.Errorf("placement width and height must be positive")
+	}
+	return nil
 }
 
 func minFeatureSize(rings [][]VectorPoint) float64 {
@@ -333,6 +383,13 @@ func ringFeatureSize(ring []VectorPoint) float64 {
 
 // QualityGate applies production limits before further processing.
 func QualityGate(rings [][]VectorPoint, units string) []VectorDiagnostic {
+	return QualityGateForMethod(rings, units, "")
+}
+
+// QualityGateForMethod applies physical feature limits appropriate to the
+// downstream process. Material-specific vinyl review remains the stricter
+// final gate after this generic vector safety pass.
+func QualityGateForMethod(rings [][]VectorPoint, units, method string) []VectorDiagnostic {
 	var out []VectorDiagnostic
 	if len(rings) == 0 {
 		out = append(out, VectorDiagnostic{Severity: "error", Code: "NO_CONTOURS", Message: "no contours produced"})
@@ -353,7 +410,7 @@ func QualityGate(rings [][]VectorPoint, units string) []VectorDiagnostic {
 		out = append(out, VectorDiagnostic{Severity: "error", Code: "POINT_EXPLOSION", Message: fmt.Sprintf("%d vertices exceed cap %d", points, MaxPathPoints)})
 	}
 	minFeat := minFeatureSize(rings)
-	warnAt, rejectAt := warnFeatureSize(units), rejectFeatureSize(units)
+	warnAt, rejectAt := methodFeatureThresholds(method, units)
 	if minFeat > 0 && minFeat < rejectAt {
 		out = append(out, VectorDiagnostic{Severity: "error", Code: "FEATURE_TOO_SMALL", Message: fmt.Sprintf("smallest feature %.2f %s is below reject threshold %.2f", minFeat, units, rejectAt)})
 	} else if minFeat > 0 && minFeat < warnAt {
@@ -363,6 +420,27 @@ func QualityGate(rings [][]VectorPoint, units string) []VectorDiagnostic {
 		out = append(out, VectorDiagnostic{Severity: "warning", Code: "HOLES_PRESENT", Message: fmt.Sprintf("kept %d interior cutout(s)", holes)})
 	}
 	return out
+}
+
+func methodFeatureThresholds(method, units string) (warnAt, rejectAt float64) {
+	if units != "mm" {
+		return warnFeatureSize(units), rejectFeatureSize(units)
+	}
+	if strings.TrimSpace(method) == "" {
+		return warnFeatureSize(units), rejectFeatureSize(units)
+	}
+	switch normalizeVectorMethod(method) {
+	case "vinyl":
+		return 0.6, 0.25
+	case "embroidery":
+		return 0.8, 0.35
+	case "screen":
+		return 0.4, 0.15
+	case "dtf":
+		return 0.25, 0.1
+	default:
+		return warnFeatureSize(units), rejectFeatureSize(units)
+	}
 }
 
 func HasVectorErrors(ds []VectorDiagnostic) bool {
