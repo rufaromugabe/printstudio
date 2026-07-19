@@ -75,7 +75,9 @@ func main() {
 		log.Fatalf("migrations: %v", err)
 	}
 	objects := newObjectStore()
-	if err = objects.ensureBucket(ctx); err != nil {
+	storeCtx, storeCancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer storeCancel()
+	if err = objects.ensureBucket(storeCtx); err != nil {
 		log.Fatalf("object storage unavailable: %v", err)
 	}
 	api := &API{db: db, maxDesigns: 100, objects: objects}

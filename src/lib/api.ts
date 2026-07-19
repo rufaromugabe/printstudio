@@ -180,11 +180,11 @@ export const api = {
   approveProductionProof:(id:string)=>request<{id:string;status:string;frozen:boolean}>(`/v1/production/proofs/${id}/approve`,{method:"POST",body:"{}"}),
   productionBoolean:(subject:PolygonPaths,clip:PolygonPaths,operation:"union"|"difference"|"intersection"|"xor")=>request<{paths:PolygonPaths}>("/v1/production/vector/boolean",{method:"POST",body:JSON.stringify({subject,clip,operation})}),
   productionOffset:(paths:PolygonPaths,deltaMm:number,join:"round"|"square"|"miter"="round",miterLimit=2)=>request<{paths:PolygonPaths}>("/v1/production/vector/offset",{method:"POST",body:JSON.stringify({paths,deltaMm,join,miterLimit})}),
-  productionVectorize:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;assetId?:string;includeProof?:boolean;ocr?:boolean}):Promise<VectorContourSet>=>{
+  productionVectorize:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;direct?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;assetId?:string;includeProof?:boolean;ocr?:boolean}):Promise<VectorContourSet>=>{
     if(options.assetId){
       return request<VectorContourSet>("/v1/production/vectorize",{method:"POST",body:JSON.stringify({assetId:options.assetId,method:options.method??"vinyl",mlPrep:!!options.mlPrep,alphaCutoff:options.alphaCutoff,placement:options.placement})});
     }
-    const query=new URLSearchParams({method:options.method??"vinyl",mlPrep:options.mlPrep?"true":"false"});
+    const query=new URLSearchParams({method:options.method??"vinyl",mlPrep:options.mlPrep?"true":"false",direct:options.direct?"true":"false"});
     if(options.alphaCutoff!=null)query.set("alphaCutoff",String(options.alphaCutoff));
     if(options.includeProof)query.set("proof","true");
     if(options.ocr===false)query.set("ocr","false");
@@ -196,8 +196,8 @@ export const api = {
     if(!response.ok)throw new Error(body.message??body.error??`Vectorize failed (${response.status})`);
     return body as VectorContourSet;
   },
-  productionVectorizeColor:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;maxColors?:number;includeProof?:boolean;ocr?:boolean}):Promise<ColorVectorResult>=>{
-    const query=new URLSearchParams({method:options.method??"screen",mode:"color",maxColors:String(options.maxColors??8),mlPrep:options.mlPrep?"true":"false"});
+  productionVectorizeColor:async(artwork:Blob,options:{method?:"vinyl"|"embroidery"|"screen"|string;mlPrep?:boolean;direct?:boolean;alphaCutoff?:number;placement?:VectorizePlacement;maxColors?:number;includeProof?:boolean;ocr?:boolean}):Promise<ColorVectorResult>=>{
+    const query=new URLSearchParams({method:options.method??"screen",mode:"color",maxColors:String(options.maxColors??8),mlPrep:options.mlPrep?"true":"false",direct:options.direct?"true":"false"});
     if(options.alphaCutoff!=null)query.set("alphaCutoff",String(options.alphaCutoff));
     if(options.includeProof)query.set("proof","true");
     if(options.ocr===false)query.set("ocr","false");

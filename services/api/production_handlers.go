@@ -530,7 +530,7 @@ func productionVectorizeHandler(a *API) http.HandlerFunc {
 			problem(w, http.StatusNotImplemented, "potrace is unavailable — advanced vectorize requires POTRACE_BIN or potrace on PATH")
 			return
 		}
-		img, placement, method, mlPrep, alpha, ok := decodeVectorizeRequest(w, r, a)
+		img, placement, method, mlPrep, direct, alpha, ok := decodeVectorizeRequest(w, r, a)
 		if !ok {
 			return
 		}
@@ -538,6 +538,7 @@ func productionVectorizeHandler(a *API) http.HandlerFunc {
 			Method:       method,
 			AlphaCutoff:  alpha,
 			MLPrep:       mlPrep,
+			Direct:       direct,
 			Placement:    placement,
 			Tools:        tools,
 			IncludeProof: strings.EqualFold(r.URL.Query().Get("proof"), "true") || r.URL.Query().Get("proof") == "1",
@@ -577,12 +578,13 @@ func productionVectorizeHandler(a *API) http.HandlerFunc {
 	}
 }
 
-func decodeVectorizeRequest(w http.ResponseWriter, r *http.Request, a *API) (image.Image, *prod.VectorizePlacement, string, bool, uint8, bool) {
+func decodeVectorizeRequest(w http.ResponseWriter, r *http.Request, a *API) (image.Image, *prod.VectorizePlacement, string, bool, bool, uint8, bool) {
 	method := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("method")))
 	if method == "" {
 		method = "vinyl"
 	}
 	mlPrep := strings.EqualFold(r.URL.Query().Get("mlPrep"), "true") || r.URL.Query().Get("mlPrep") == "1"
+	direct := strings.EqualFold(r.URL.Query().Get("direct"), "true") || r.URL.Query().Get("direct") == "1"
 	alpha := prod.DefaultAlphaCutoff
 	if raw := r.URL.Query().Get("alphaCutoff"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n < 256 {
@@ -594,7 +596,7 @@ func decodeVectorizeRequest(w http.ResponseWriter, r *http.Request, a *API) (ima
 		var p prod.VectorizePlacement
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
 			problem(w, http.StatusBadRequest, "invalid X-PrintStudio-Placement JSON")
-			return nil, nil, "", false, 0, false
+			return nil, nil, "", false, false, 0, false
 		}
 		placement = &p
 	}
@@ -606,16 +608,18 @@ func decodeVectorizeRequest(w http.ResponseWriter, r *http.Request, a *API) (ima
 			ImageBase64 string                   `json:"imageBase64"`
 			Method      string                   `json:"method"`
 			MLPrep      bool                     `json:"mlPrep"`
+			Direct      bool                     `json:"direct"`
 			AlphaCutoff uint8                    `json:"alphaCutoff"`
 			Placement   *prod.VectorizePlacement `json:"placement"`
 		}
 		if decode(w, r, &in) != nil {
-			return nil, nil, "", false, 0, false
+			return nil, nil, "", false, false, 0, false
 		}
 		if in.Method != "" {
 			method = strings.ToLower(strings.TrimSpace(in.Method))
 		}
 		mlPrep = mlPrep || in.MLPrep
+		direct = direct || in.Direct
 		if in.AlphaCutoff > 0 {
 			alpha = in.AlphaCutoff
 		}
@@ -628,19 +632,19 @@ func decodeVectorizeRequest(w http.ResponseWriter, r *http.Request, a *API) (ima
 			body, err := fetch(in.AssetID)
 			if err != nil {
 				problem(w, http.StatusUnprocessableEntity, err.Error())
-				return nil, nil, "", false, 0, false
+				return nil, nil, "", false, false, 0, false
 			}
 			defer body.Close()
 			img, _, err := image.Decode(body)
 			if err != nil {
 				problem(w, http.StatusBadRequest, "asset is not a decodable image")
-				return nil, nil, "", false, 0, false
+				return nil, nil, "", false, false, 0, false
 			}
-			return img, placement, method, mlPrep, alpha, true
+			return img, placement, method, mlPrep, direct, alpha, true
 		}
 		if in.ImageBase64 == "" {
 			problem(w, http.StatusBadRequest, "imageBase64 or assetId is required")
-			return nil, nil, "", false, 0, false
+			return nil, nil, "", false, false, 0, false
 		}
 		raw := in.ImageBase64
 		if i := strings.Index(raw, ","); i >= 0 && strings.Contains(raw[:i], "base64") {
@@ -649,21 +653,21 @@ func decodeVectorizeRequest(w http.ResponseWriter, r *http.Request, a *API) (ima
 		data, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {
 			problem(w, http.StatusBadRequest, "imageBase64 is invalid")
-			return nil, nil, "", false, 0, false
+			return nil, nil, "", false, false, 0, false
 		}
 		img, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
 			problem(w, http.StatusBadRequest, "imageBase64 must decode to PNG or JPEG")
-			return nil, nil, "", false, 0, false
+			return nil, nil, "", false, false, 0, false
 		}
-		return img, placement, method, mlPrep, alpha, true
+		return img, placement, method, mlPrep, direct, alpha, true
 	}
 
 	img, ok := decodeProductionImage(w, r)
 	if !ok {
-		return nil, nil, "", false, 0, false
+		return nil, nil, "", false, false, 0, false
 	}
-	return img, placement, method, mlPrep, alpha, true
+	return img, placement, method, mlPrep, direct, alpha, true
 }
 func decodeProductionImage(w http.ResponseWriter, r *http.Request) (image.Image, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)

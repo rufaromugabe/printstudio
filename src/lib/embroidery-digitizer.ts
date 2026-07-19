@@ -116,13 +116,13 @@ async function extractImageLayersServer(
   };
   if(mode==="silhouette"||element.color){
     const blob=await renderElementPNG(element);
-    const contours=await api.productionVectorize(blob,{method,mlPrep,placement,includeProof:true});
+    const contours=await api.productionVectorize(blob,{method,mlPrep,direct:!mlPrep,placement,includeProof:true});
     contours.ocr=await refineOCRFontMatch(element,contours.ocr);
     pushVectorResult(diagnostics,reports,similarities,ocrReports,element.id,contours);
     return[{threadId:element.color||"#222222",rings:contours.rings,units:"mm"}];
   }
   const blob=await renderElementPNG(element);
-  const separated=await api.productionVectorizeColor(blob,{method,mlPrep,placement,maxColors:MAX_IMAGE_THREADS,includeProof:true});
+  const separated=await api.productionVectorizeColor(blob,{method,mlPrep,direct:!mlPrep,placement,maxColors:MAX_IMAGE_THREADS,includeProof:true});
   separated.ocr=await refineOCRFontMatch(element,separated.ocr);
   for(const diagnostic of separated.diagnostics??[])diagnostics.push(diagnostic);
   if(separated.ocr?.attempted&&!ocrReports.some(item=>item.elementId===element.id&&item.report.text===separated.ocr.text))ocrReports.push({elementId:element.id,report:separated.ocr});

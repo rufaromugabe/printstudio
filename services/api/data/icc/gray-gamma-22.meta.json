@@ -4,7 +4,7 @@
   "fileName": "gray-gamma-22.icc",
   "sha256": "00c0f94e09127520a17dc0e1d9264b5702081d96dbdb1549ee88e3631ce42a9d",
   "size": 360,
-  "version": 17,
-  "createdAt": "2026-07-19T12:51:30.269618Z",
+  "version": 21,
+  "createdAt": "2026-07-19T15:00:46.6516083Z",
   "description": "Neutral grayscale for mono artwork."
 }

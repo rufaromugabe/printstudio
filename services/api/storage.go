@@ -60,8 +60,11 @@ func newObjectStore() *ObjectStore {
 func (s *ObjectStore) ensureBucket(ctx context.Context) error {
 	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &s.bucket})
 	if err != nil {
-		if _, err = s.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: &s.bucket}); err != nil {
-			return err
+		if !isMissingBucket(err) {
+			return fmt.Errorf("head bucket %q: %w", s.bucket, err)
+		}
+		if _, err = s.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: &s.bucket}); err != nil && !isBucketAlreadyExists(err) {
+			return fmt.Errorf("create bucket %q: %w", s.bucket, err)
 		}
 	}
 	_, err = s.client.PutBucketCors(ctx, &s3.PutBucketCorsInput{
@@ -87,6 +90,39 @@ func (s *ObjectStore) ensureBucket(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+func s3ErrorCode(err error) string {
+	var apiErr interface{ ErrorCode() string }
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode()
+	}
+	msg := err.Error()
+	for _, code := range []string{"NotFound", "NoSuchBucket", "NoSuchKey", "BucketAlreadyOwnedByYou", "BucketAlreadyExists", "NotImplemented"} {
+		if strings.Contains(msg, code) {
+			return code
+		}
+	}
+	return ""
+}
+
+func isMissingBucket(err error) bool {
+	switch s3ErrorCode(err) {
+	case "NotFound", "NoSuchBucket":
+		return true
+	default:
+		// HeadBucket often surfaces as 404 without a stable typed code across backends.
+		return strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "status code: 404")
+	}
+}
+
+func isBucketAlreadyExists(err error) bool {
+	switch s3ErrorCode(err) {
+	case "BucketAlreadyOwnedByYou", "BucketAlreadyExists":
+		return true
+	default:
+		return false
+	}
 }
 func (s *ObjectStore) uploadURL(ctx context.Context, key, contentType string, size int64) (string, error) {
 	out, err := s.signer.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &s.bucket, Key: &key, ContentType: &contentType, ContentLength: aws.Int64(size)}, func(o *s3.PresignOptions) { o.Expires = 15 * time.Minute })

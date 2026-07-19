@@ -71,6 +71,9 @@ func VectorizeColor(ctx context.Context, img image.Image, opt VectorizeOptions, 
 		}
 	}
 	analysis, err := analyzeVectorArtwork(prepared, opt.AlphaCutoff)
+	if opt.Direct {
+		analysis, err = directVectorArtworkAnalysis(prepared, opt.AlphaCutoff)
+	}
 	if err != nil {
 		return nil, err
 	}

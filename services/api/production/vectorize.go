@@ -64,9 +64,12 @@ type VectorizePlacement struct {
 }
 
 type VectorizeOptions struct {
-	Method           string // vinyl|embroidery|screen
-	AlphaCutoff      uint8
-	MLPrep           bool
+	Method      string // vinyl|embroidery|screen
+	AlphaCutoff uint8
+	MLPrep      bool
+	// Direct preserves every source-alpha pixel and skips content-aware cleanup.
+	// It is used when an operator needs a strict, bounds-preserving trace.
+	Direct           bool
 	Placement        *VectorizePlacement
 	Tools            NativeTools
 	Prep             ImagePrep // optional; nil uses passthrough
@@ -114,7 +117,14 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		tracer = TracerPotrace
 	}
 
-	traceMask, prepMeta, qualityProfile, err := prepareVectorMask(prepared, opt.Method, opt.AlphaCutoff, opt.ForceContentKind)
+	var traceMask image.Image
+	var prepMeta VectorPrepMetadata
+	var qualityProfile vectorQualityProfile
+	if opt.Direct {
+		traceMask, prepMeta, qualityProfile, err = prepareDirectVectorMask(prepared, opt.Method, opt.AlphaCutoff)
+	} else {
+		traceMask, prepMeta, qualityProfile, err = prepareVectorMask(prepared, opt.Method, opt.AlphaCutoff, opt.ForceContentKind)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("content-aware prep: %w", err)
 	}

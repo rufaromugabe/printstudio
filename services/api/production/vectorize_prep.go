@@ -61,6 +61,70 @@ type vectorQualityProfile struct {
 	simplifyTolerance float64
 }
 
+// prepareDirectVectorMask is deliberately conservative: no border-colour
+// inference, component removal, healing, resizing or crop is allowed here.
+// The output retains the exact source rectangle so a direct trace cannot lose
+// artwork at an image edge.
+func prepareDirectVectorMask(img image.Image, method string, alphaCutoff uint8) (image.Image, VectorPrepMetadata, vectorQualityProfile, error) {
+	if img == nil {
+		return nil, VectorPrepMetadata{}, vectorQualityProfile{}, fmt.Errorf("image is required")
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w < 2 || h < 2 {
+		return nil, VectorPrepMetadata{}, vectorQualityProfile{}, fmt.Errorf("image is too small to vectorize")
+	}
+	if int64(w)*int64(h) > MaxVectorInputPixels {
+		return nil, VectorPrepMetadata{}, vectorQualityProfile{}, fmt.Errorf("image exceeds the %d-megapixel vector preflight limit", MaxVectorInputPixels/1_000_000)
+	}
+	if alphaCutoff == 0 {
+		alphaCutoff = DefaultAlphaCutoff
+	}
+	mask := image.NewAlpha(image.Rect(0, 0, w, h))
+	foreground := 0
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := color.NRGBAModel.Convert(img.At(b.Min.X+x, b.Min.Y+y)).(color.NRGBA)
+			if c.A >= alphaCutoff {
+				mask.Pix[y*w+x] = 255
+				foreground++
+			}
+		}
+	}
+	if foreground == 0 {
+		return nil, VectorPrepMetadata{}, vectorQualityProfile{}, fmt.Errorf("direct trace found no non-transparent pixels")
+	}
+	profile := vectorProfile(method, ContentFlatArt)
+	return mask, VectorPrepMetadata{ContentKind: ContentFlatArt, Confidence: 1, MaskSource: "source-alpha-direct", InputWidthPx: w, InputHeightPx: h, PreparedWidthPx: w, PreparedHeightPx: h, UpscaleFactor: 1, ForegroundRatio: roundTo(float64(foreground)/float64(w*h), 4), Profile: "direct-" + profile.name, Steps: []string{"direct source-alpha trace (full image bounds preserved)", "skipped background isolation, cleanup and supersampling"}}, profile, nil
+}
+
+func directVectorArtworkAnalysis(img image.Image, alphaCutoff uint8) (vectorArtworkAnalysis, error) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w < 2 || h < 2 {
+		return vectorArtworkAnalysis{}, fmt.Errorf("image is too small to vectorize")
+	}
+	if alphaCutoff == 0 {
+		alphaCutoff = DefaultAlphaCutoff
+	}
+	mask := make([]bool, w*h)
+	foreground := 0
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := color.NRGBAModel.Convert(img.At(b.Min.X+x, b.Min.Y+y)).(color.NRGBA)
+			on := c.A >= alphaCutoff
+			mask[y*w+x] = on
+			if on {
+				foreground++
+			}
+		}
+	}
+	if foreground == 0 {
+		return vectorArtworkAnalysis{}, fmt.Errorf("direct trace found no non-transparent pixels")
+	}
+	return vectorArtworkAnalysis{kind: ContentFlatArt, confidence: 1, maskSource: "source-alpha-direct", mask: mask, width: w, height: h, foregroundRatio: float64(foreground) / float64(w*h)}, nil
+}
+
 func prepareVectorMask(img image.Image, method string, alphaCutoff uint8, forceContentKind string) (image.Image, VectorPrepMetadata, vectorQualityProfile, error) {
 	analysis, err := analyzeVectorArtwork(img, alphaCutoff)
 	if err != nil {
