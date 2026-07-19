@@ -18,7 +18,7 @@ func TestCompileEmbroideryHandler(t *testing.T) {
 		t.Fatalf("status %d: %s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, `"compilerVersion":"0.3.0"`) || !strings.Contains(body, `"svg":"`) || !strings.Contains(body, `"review"`) || !strings.Contains(body, `"tshirt"`) {
+	if !strings.Contains(body, `"compilerVersion":"0.5.0"`) || !strings.Contains(body, `"svg":"`) || !strings.Contains(body, `"review"`) || !strings.Contains(body, `"tshirt"`) {
 		t.Fatalf("missing compiler response: %s", body)
 	}
 }

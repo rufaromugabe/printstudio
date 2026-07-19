@@ -8,7 +8,7 @@ import (
 	"math"
 )
 
-const CompilerVersion = "0.3.0"
+const CompilerVersion = "0.5.0"
 
 func Compile(regions []Region, profile MachineProfile) (Document, error) {
 	return CompileWithFabric(regions, profile, FabricWoven)
@@ -38,12 +38,14 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 		}
 		block := Block{ID: "block-" + r.ID, RegionID: r.ID, ThreadID: r.ThreadID, Kind: r.Kind, Bounds: polygonBounds(r.Geometry)}
 		var err error
-		if r.EdgeUnderlay {
+		if r.EdgeUnderlay && !managesOwnUnderlay(r.Kind) {
 			block.Underlay = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, 2.5), "edge_underlay")
 		}
 		switch r.Kind {
 		case Running:
 			block.Stitches = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, 2.5), "running")
+		case Bean:
+			block.Stitches = bean(r)
 		case Tatami:
 			block.Stitches, err = tatami(r, minStitch)
 			if err != nil && isEmptyFill(err) {
@@ -57,8 +59,74 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 				})
 				err = nil
 			}
+		case Motif:
+			block.Stitches, err = motif(r, minStitch)
+			if err != nil && isEmptyFill(err) {
+				block.Stitches = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, minStitch), "motif_fallback_running")
+				block.Kind = Running
+				d.Diagnostics = append(d.Diagnostics, Diagnostic{
+					Severity: Warning, Code: "MOTIF_FALLBACK_RUNNING", RegionID: r.ID,
+					Message: "motif fill produced no stitches; used running outline",
+				})
+				err = nil
+			}
+		case Contour:
+			block.Stitches, err = contour(r)
+			if err != nil && isEmptyFill(err) {
+				block.Stitches = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, minStitch), "contour_fallback_running")
+				block.Kind = Running
+				err = nil
+			}
+		case Cross:
+			block.Stitches, err = cross(r, minStitch)
+			if err != nil && isEmptyFill(err) {
+				block.Stitches = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, minStitch), "cross_fallback_running")
+				block.Kind = Running
+				err = nil
+			}
+		case Estitch:
+			block.Stitches = estitch(r)
 		case Satin:
 			block.Underlay, block.Stitches, err = satin(r, profile)
+		case Puff:
+			var foam float64
+			block.Underlay, block.Stitches, foam, err = puff(r, profile)
+			if err == nil {
+				d.Diagnostics = append(d.Diagnostics, Diagnostic{
+					Severity: Warning, Code: "PUFF_OPERATOR", RegionID: r.ID,
+					Message: puffOperatorMessage(foam),
+				})
+			}
+		case Applique:
+			block.Underlay, block.Stitches, err = applique(r, profile)
+			if err == nil {
+				d.Diagnostics = append(d.Diagnostics, Diagnostic{
+					Severity: Warning, Code: "APPLIQUE_OPERATOR", RegionID: r.ID,
+					Message: appliqueOperatorMessage(),
+				})
+			}
+		case Sequin:
+			block.Stitches, err = sequin(r)
+			if err == nil {
+				d.Diagnostics = append(d.Diagnostics, Diagnostic{
+					Severity: Warning, Code: "SEQUIN_OPERATOR", RegionID: r.ID,
+					Message: sequinOperatorMessage(),
+				})
+			}
+		case Cord:
+			block.Stitches = cord(r)
+			d.Diagnostics = append(d.Diagnostics, Diagnostic{
+				Severity: Warning, Code: "CORD_OPERATOR", RegionID: r.ID,
+				Message: cordOperatorMessage(),
+			})
+		case Chenille:
+			block.Stitches, err = chenille(r, minStitch)
+			if err == nil {
+				d.Diagnostics = append(d.Diagnostics, Diagnostic{
+					Severity: Warning, Code: "CHENILLE_OPERATOR", RegionID: r.ID,
+					Message: chenilleOperatorMessage(),
+				})
+			}
 		default:
 			err = fmt.Errorf("unsupported stitch kind %q", r.Kind)
 		}
@@ -66,8 +134,8 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 			return d, fmt.Errorf("region %s: %w", r.ID, err)
 		}
 		block.Underlay = pruneShortStitches(block.Underlay, minStitch)
-		// Satin rungs are width pairs; never drop them for length. Running/tatami are safe to prune.
-		if r.Kind != Satin {
+		// Column / decorative pairs must keep short rungs; running/tatami/bean/contour are safe to prune.
+		if !keepShortStitches(r.Kind) {
 			block.Stitches = pruneShortStitches(block.Stitches, minStitch)
 		}
 		all := append(append([]Stitch{}, block.Underlay...), block.Stitches...)

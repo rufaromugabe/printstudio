@@ -58,10 +58,11 @@ Success is measured by sew quality, repeatability and operator trust—not by st
 - Running stitch
 - Triple/bean stitch
 - Satin columns
+- **Puff / 3D foam** (raised badge lettering and columns)
 - Tatami fills
 - Contour fills
 - Manual stitch blocks
-- Underlay: centre walk, edge walk, zigzag and lattice
+- Underlay: centre walk, edge walk, zigzag and lattice (disabled for puff cover so foam is not crushed)
 
 ### Outputs
 
@@ -211,6 +212,34 @@ Outputs:
 - Entry/exit points
 
 The validator checks that underlay stays inside compensated boundaries and does not create excessive penetration clusters.
+
+### 5b. Puff / 3D foam (badge raised satin)
+
+Police-badge style raised logos use **operator-placed embroidery foam**, not a simulated thread pile. The compiler emits a dense cover satin plan plus sew-out diagnostics; the machine does not feed foam automatically.
+
+**Studio controls**
+
+- Per-element stitch family: `puff`
+- Foam height: **2 mm** or **3 mm** (default 3 mm)
+- Soft fabric underlay is forced off for puff regions
+
+**Compiler behaviour (`kind: "puff"`)**
+
+- Cover density defaults: ~0.35 mm rows for 2 mm foam, ~0.30 mm for 3 mm foam
+- Reuses satin column / spine / ring rail builders; top stitches are tagged `puff_satin`
+- Rejects panel-like fills and columns wider than 7 mm — puff is for lettering and badge columns, not tatami panels
+- Emits `PUFF_OPERATOR` diagnostic: place foam, sew cover, tear away excess
+- Review scorecard includes `PUFF_FOAM` so badge jobs route to stitch-out review
+
+**Operator workflow**
+
+1. Hoop garment with appropriate stabilizer.
+2. Lay foam of the declared height over the sew area.
+3. Sew the DST cover satin (perforates foam).
+4. Tear away excess foam; clean edges as needed.
+5. Confirm sew-out before production release.
+
+Chenille / true pile machines are out of scope for this family.
 
 ### 6. Compensation model
 

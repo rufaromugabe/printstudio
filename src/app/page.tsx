@@ -17,7 +17,30 @@ type BackgroundPrompt = { elementId: string; previewUrl: string; busy: boolean }
 
 type Side = string;
 type SidebarPanel = "design"|"templates"|"elements"|"uploads"|"imagine"|"admin"|"help";
-type Element = { id: string; type: "text" | "image"; value: string; assetId?: string; sourceWidth?:number; sourceHeight?:number; x: number; y: number; w: number; h: number; rotation: number; color: string; fontSize: number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";textDecoration?:"none"|"underline";textAlign?:"left"|"center"|"right";letterSpacing?:number;lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";curvePosition?:"outside"|"inside";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number };
+type EmbroideryKindOption="auto"|"running"|"tatami"|"satin"|"puff"|"bean"|"applique"|"motif"|"contour"|"estitch"|"cross"|"sequin"|"cord"|"chenille";
+type Element = { id: string; type: "text" | "image"; value: string; assetId?: string; sourceWidth?:number; sourceHeight?:number; x: number; y: number; w: number; h: number; rotation: number; color: string; fontSize: number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";textDecoration?:"none"|"underline";textAlign?:"left"|"center"|"right";letterSpacing?:number;lineHeight?:number;strokeColor?:string;strokeWidth?:number;shadow?:boolean;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";curvePosition?:"outside"|"inside";embroideryKind?:EmbroideryKindOption;embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number;embroideryFoamHeightMm?:2|3 };
+const EMBROIDERY_KIND_OPTIONS: {id:EmbroideryKindOption;label:string}[]=[
+  {id:"auto",label:"Auto"},
+  {id:"satin",label:"Satin"},
+  {id:"puff",label:"Puff"},
+  {id:"tatami",label:"Tatami"},
+  {id:"running",label:"Running"},
+  {id:"bean",label:"Bean (triple run)"},
+  {id:"applique",label:"Appliqué"},
+  {id:"motif",label:"Motif fill"},
+  {id:"contour",label:"Contour fill"},
+  {id:"estitch",label:"E-stitch / blanket"},
+  {id:"cross",label:"Cross-stitch"},
+  {id:"sequin",label:"Sequin"},
+  {id:"cord",label:"Cord"},
+  {id:"chenille",label:"Chenille"},
+];
+function embroideryHidesUnderlay(kind:EmbroideryKindOption|undefined){
+  return kind==="puff"||kind==="applique"||kind==="sequin";
+}
+function embroideryHidesDensity(kind:EmbroideryKindOption|undefined){
+  return kind==="puff";
+}
 type Design = { name: string; product: string; productId?:string;productProperties:Record<string,string|number|boolean>; color: string; method: string; side: Side; elements: Record<Side, Element[]>; viewCanvas?: Record<string, string> };
 
 const COLORS = ["#f4f1e9", "#17191c", "#d8b7ab", "#c8cfbc", "#203d63"];
@@ -87,7 +110,7 @@ export default function Home() {
   const [screenLpi,setScreenLpi]=useState(45);
   const [screenMode,setScreenMode]=useState<"am"|"fm">("am");
   const [screenTrapPreset,setScreenTrapPreset]=useState("screen-plastisol-45lpi");
-  const [embroideryDefaults,setEmbroideryDefaults]=useState<{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass}>({kind:"auto",spacing:.4,angle:0,underlay:"auto",stitchLength:3,threadBrand:"none",fabricClass:"tshirt"});
+  const [embroideryDefaults,setEmbroideryDefaults]=useState<{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;foamHeightMm:2|3;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass}>({kind:"auto",spacing:.4,angle:0,underlay:"auto",stitchLength:3,foamHeightMm:3,threadBrand:"none",fabricClass:"tshirt"});
   const [threadLabels,setThreadLabels]=useState<Record<string,string>>({});
   const [proofId,setProofId]=useState("");
   const [proofState,setProofState]=useState<"none"|"pending"|"approved">("none");
@@ -100,7 +123,7 @@ export default function Home() {
   const embroideryRequestRef=useRef<EmbroideryRequest|null>(null);
   const withEmbroideryDefaults=(el:Element):Element=>{
     if(design.method.toLowerCase()!=="embroidery")return el;
-    return{...el,embroideryKind:embroideryDefaults.kind,embroiderySpacing:embroideryDefaults.spacing,embroideryAngle:embroideryDefaults.angle,embroideryUnderlay:embroideryDefaults.underlay,embroideryStitchLength:embroideryDefaults.stitchLength};
+    return{...el,embroideryKind:embroideryDefaults.kind,embroiderySpacing:embroideryDefaults.spacing,embroideryAngle:embroideryDefaults.angle,embroideryUnderlay:embroideryHidesUnderlay(embroideryDefaults.kind)?"none":embroideryDefaults.underlay,embroideryStitchLength:embroideryDefaults.stitchLength,embroideryFoamHeightMm:embroideryDefaults.foamHeightMm};
   };
   const googleClientId=process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID??"";
   const [authenticated,setAuthenticated]=useState(!googleClientId);
@@ -549,8 +572,8 @@ type MethodSettingsProps={
   screenLpi:number;setScreenLpi:(value:number)=>void;
   screenMode:"am"|"fm";setScreenMode:(value:"am"|"fm")=>void;
   screenTrapPreset:string;setScreenTrapPreset:(value:string)=>void;
-  embroideryDefaults:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass};
-  setEmbroideryDefaults:(value:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass})=>void;
+  embroideryDefaults:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;foamHeightMm:2|3;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass};
+  setEmbroideryDefaults:(value:{kind:Element["embroideryKind"];spacing:number;angle:number;underlay:Element["embroideryUnderlay"];stitchLength:number;foamHeightMm:2|3;threadBrand:ThreadBrand;fabricClass:EmbroideryFabricClass})=>void;
   gang:{copies:number;width:number;height:number;fillSheet:boolean;gap:number;setCopies:(value:number)=>void;setWidth:(value:number)=>void;setHeight:(value:number)=>void;setFillSheet:(value:boolean)=>void;setGap:(value:number)=>void};
 };
 function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl,setMirrorVinyl,vinylMaterialClass,setVinylMaterialClass,advancedVectorize,setAdvancedVectorize,dtfTrapPreset,setDtfTrapPreset,dtfUnderbaseSpread,setDtfUnderbaseSpread,screenLpi,setScreenLpi,screenMode,setScreenMode,screenTrapPreset,setScreenTrapPreset,embroideryDefaults,setEmbroideryDefaults,gang}:MethodSettingsProps){
@@ -593,13 +616,20 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
       <p className="hint" style={{marginTop:0}}>Sets density / underlay defaults and review scoring. Sew-out still required.</p>
       <label className="check"><input type="checkbox" checked={advancedVectorize} onChange={e=>setAdvancedVectorize(e.target.checked)}/> Advanced vectorize (ML)</label>
       <p className="hint" style={{marginTop:0}}>Image layers always Potrace on the server; this toggles optional ML prep. Editable text stays glyph-traced.</p>
-      <p className="hint" style={{marginTop:0}}>Stitch family</p>
-      <div className="segmented">{([["auto","Auto"],["satin","Satin"],["tatami","Tatami"],["running","Run"]] as const).map(([id,label])=><button key={id} type="button" className={(embroideryDefaults.kind??"auto")===id?"active":""} onClick={()=>setEmbroideryDefaults({...embroideryDefaults,kind:id})}>{label}</button>)}</div>
-      <AdjustField label="Density / row spacing" value={embroideryDefaults.spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>setEmbroideryDefaults({...embroideryDefaults,spacing:v})} meta={densityLabel(embroideryDefaults.spacing)}/>
+      <label>Stitch family<select value={embroideryDefaults.kind??"auto"} onChange={e=>{const kind=e.target.value as EmbroideryKindOption;setEmbroideryDefaults({...embroideryDefaults,kind,underlay:embroideryHidesUnderlay(kind)?"none":embroideryDefaults.underlay})}}>{EMBROIDERY_KIND_OPTIONS.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select></label>
+      {(embroideryDefaults.kind??"auto")==="puff"&&<>
+        <label>Foam height<select value={embroideryDefaults.foamHeightMm} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,foamHeightMm:Number(e.target.value)===2?2:3})}><option value={2}>2 mm foam</option><option value={3}>3 mm foam</option></select></label>
+        <p className="hint" style={{marginTop:0}}>Badge-style raised satin: place foam, sew dense cover, tear away excess. Soft underlay is off so foam is not crushed.</p>
+      </>}
+      {(embroideryDefaults.kind??"auto")==="applique"&&<p className="hint" style={{marginTop:0}}>Appliqué: placement → place fabric → tack → trim → cover satin. Operator pause is required.</p>}
+      {(embroideryDefaults.kind??"auto")==="sequin"&&<p className="hint" style={{marginTop:0}}>Sequin: attach stops on a grid — needs a sequin head or hand placement.</p>}
+      {(embroideryDefaults.kind??"auto")==="cord"&&<p className="hint" style={{marginTop:0}}>Cord: zigzag couching along the outline — feed filler cord while sewing.</p>}
+      {(embroideryDefaults.kind??"auto")==="chenille"&&<p className="hint" style={{marginTop:0}}>Chenille: dense looping zigzag fill for pile / loop looks.</p>}
+      {!embroideryHidesDensity(embroideryDefaults.kind)&&<AdjustField label="Density / row spacing" value={embroideryDefaults.spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>setEmbroideryDefaults({...embroideryDefaults,spacing:v})} meta={densityLabel(embroideryDefaults.spacing)}/>}
       <AdjustField label="Stitch length" value={embroideryDefaults.stitchLength} min={1} max={8} step={.1} unit=" mm" format={v=>v.toFixed(1)} onChange={v=>setEmbroideryDefaults({...embroideryDefaults,stitchLength:v})}/>
       <AdjustField label="Stitch direction" value={embroideryDefaults.angle} min={-180} max={180} step={5} unit="°" onChange={v=>setEmbroideryDefaults({...embroideryDefaults,angle:v})} presets={[{label:"0°",value:0},{label:"45°",value:45},{label:"90°",value:90},{label:"-45°",value:-45}]}/>
       <label>Thread chart<select value={embroideryDefaults.threadBrand} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,threadBrand:e.target.value as ThreadBrand})}><option value="none">Exact hex (no chart)</option><option value="madeira">Madeira Rayon (nearest)</option><option value="isacord">Isacord (nearest)</option></select></label>
-      <label>Default underlay<select value={embroideryDefaults.underlay??"auto"} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,underlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>
+      {!embroideryHidesUnderlay(embroideryDefaults.kind)&&<label>Default underlay<select value={embroideryDefaults.underlay??"auto"} onChange={e=>setEmbroideryDefaults({...embroideryDefaults,underlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>}
       <div className="tip-list">
         <p className="prop-label">THREAD TIPS</p>
         <ul>
@@ -607,6 +637,8 @@ function MethodSettings({method,iccCombo,setIccCombo,iccCombinations,mirrorVinyl
           <li>Flat logo colours separate cleanly; photos keep the strongest 8 colours.</li>
           <li>Text threads come from the text colour picker.</li>
           <li>Select an image layer to force one thread colour instead of auto-separating.</li>
+          <li>Puff is for raised columns/lettering (police-badge style), not panel fills.</li>
+          <li>Appliqué, sequin, cord, and chenille need an operator process at the machine.</li>
         </ul>
       </div>
     </>}
@@ -664,6 +696,9 @@ function EmbroideryControls({element,onChange}:{element:Element;onChange:(patch:
   const spacing=element.embroiderySpacing??.45;
   const angle=element.embroideryAngle??0;
   const kind=element.embroideryKind??"auto";
+  const puff=kind==="puff";
+  const hideUnderlay=embroideryHidesUnderlay(kind);
+  const hideDensity=embroideryHidesDensity(kind);
   return <div className="embroidery-controls">
     <p className="prop-label">EMBROIDERY</p>
     {element.type==="image"&&<>
@@ -671,13 +706,18 @@ function EmbroideryControls({element,onChange}:{element:Element;onChange:(patch:
       {forceThread&&<label>Thread colour<input type="color" value={element.color||"#222222"} onChange={e=>onChange({color:e.target.value})}/></label>}
       <p className="curve-hint">{forceThread?"This image will stitch as a single thread.":"Threads are taken from the artwork colours (up to 8)."}</p>
     </>}
-    <p className="curve-hint" style={{marginBottom:0}}>Stitch family</p>
-    <div className="segmented">{([["auto","Auto"],["satin","Satin"],["tatami","Tatami"],["running","Run"]] as const).map(([id,label])=><button key={id} type="button" className={kind===id?"active":""} onClick={()=>onChange({embroideryKind:id})}>{label}</button>)}</div>
-    <AdjustField label="Density / row spacing" value={spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>onChange({embroiderySpacing:v})} meta={densityLabel(spacing)}/>
+    <label>Stitch family<select value={kind} onChange={e=>{const next=e.target.value as EmbroideryKindOption;onChange({embroideryKind:next,embroideryUnderlay:embroideryHidesUnderlay(next)?"none":element.embroideryUnderlay,embroideryFoamHeightMm:element.embroideryFoamHeightMm??3})}}>{EMBROIDERY_KIND_OPTIONS.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select></label>
+    {puff&&<>
+      <label>Foam height<select value={element.embroideryFoamHeightMm??3} onChange={e=>onChange({embroideryFoamHeightMm:Number(e.target.value)===2?2:3})}><option value={2}>2 mm foam</option><option value={3}>3 mm foam</option></select></label>
+      <p className="curve-hint">Raised badge satin: place foam on the hoop, sew the cover, tear away excess. Soft underlay stays off.</p>
+    </>}
+    {kind==="applique"&&<p className="curve-hint">Appliqué needs fabric placement and trim between placement, tack, and cover.</p>}
+    {kind==="sequin"&&<p className="curve-hint">Sequin attach stops — sequin head or hand-place at each stop.</p>}
+    {!hideDensity&&<AdjustField label="Density / row spacing" value={spacing} min={.25} max={2.5} step={.05} unit=" mm" format={v=>v.toFixed(2)} onChange={v=>onChange({embroiderySpacing:v})} meta={densityLabel(spacing)}/>}
     <AdjustField label="Stitch length" value={element.embroideryStitchLength??3} min={1} max={8} step={.1} unit=" mm" format={v=>v.toFixed(1)} onChange={v=>onChange({embroideryStitchLength:v})}/>
     <AdjustField label="Stitch direction" value={angle} min={-180} max={180} step={5} unit="°" onChange={v=>onChange({embroideryAngle:v})} presets={[{label:"0°",value:0},{label:"45°",value:45},{label:"90°",value:90},{label:"-45°",value:-45}]}/>
-    <label>Underlay<select value={element.embroideryUnderlay??"auto"} onChange={e=>onChange({embroideryUnderlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>
-    <p className="curve-hint">Drag the slider or tap − / ＋. Lower spacing = denser fill. Thread chart is set in embroidery defaults.</p>
+    {!hideUnderlay&&<label>Underlay<select value={element.embroideryUnderlay??"auto"} onChange={e=>onChange({embroideryUnderlay:e.target.value as Element["embroideryUnderlay"]})}><option value="auto">Automatic</option><option value="center-zigzag">Center + zigzag</option><option value="edge">Edge run</option><option value="none">None</option></select></label>}
+    <p className="curve-hint">{puff?"Puff is for columns and lettering — not large panel fills.":"Drag the slider or tap − / ＋. Lower spacing = denser fill. Thread chart is set in embroidery defaults."}</p>
   </div>;
 }
 

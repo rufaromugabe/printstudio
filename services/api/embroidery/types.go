@@ -35,10 +35,30 @@ type Stitch struct {
 type StitchKind string
 
 const (
-	Running StitchKind = "running"
-	Tatami  StitchKind = "tatami"
-	Satin   StitchKind = "satin"
+	Running   StitchKind = "running"
+	Tatami    StitchKind = "tatami"
+	Satin     StitchKind = "satin"
+	Puff      StitchKind = "puff"
+	Bean      StitchKind = "bean"
+	Applique  StitchKind = "applique"
+	Motif     StitchKind = "motif"
+	Contour   StitchKind = "contour"
+	Estitch   StitchKind = "estitch"
+	Cross     StitchKind = "cross"
+	Sequin    StitchKind = "sequin"
+	Cord      StitchKind = "cord"
+	Chenille  StitchKind = "chenille"
 )
+
+// SpecialtyKind reports whether the kind needs an operator process note.
+func SpecialtyKind(k StitchKind) bool {
+	switch k {
+	case Applique, Sequin, Cord, Chenille, Puff:
+		return true
+	default:
+		return false
+	}
+}
 
 // Polygon uses the first ring as its exterior and subsequent rings as holes.
 type Polygon struct {
@@ -56,6 +76,8 @@ type Region struct {
 	// WidthMM enables spine satin: Rings[0] is treated as a centerline and
 	// expanded to left/right rails at this total column width.
 	WidthMM        float64    `json:"widthMm,omitempty"`
+	// FoamHeightMM is the operator foam thickness for puff (2 or 3 mm).
+	FoamHeightMM   float64    `json:"foamHeightMm,omitempty"`
 	EdgeUnderlay   bool       `json:"edgeUnderlay,omitempty"`
 	CenterUnderlay bool       `json:"centerUnderlay,omitempty"`
 	ZigzagUnderlay bool       `json:"zigzagUnderlay,omitempty"`
@@ -129,9 +151,9 @@ func (p Polygon) Validate() error {
 }
 
 // ValidateGeometry accepts either a filled polygon or an open spine centerline
-// when WidthMM is set for satin.
+// when WidthMM is set for satin/puff.
 func (r Region) ValidateGeometry() error {
-	if r.Kind == Satin && r.WidthMM > 0 {
+	if (r.Kind == Satin || r.Kind == Puff) && r.WidthMM > 0 {
 		if len(r.Geometry.Rings) != 1 || len(r.Geometry.Rings[0]) < 2 {
 			return fmt.Errorf("spine satin requires a single centerline with at least two points")
 		}

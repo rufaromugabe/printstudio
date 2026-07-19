@@ -1,7 +1,8 @@
-import { api, EmbroideryPoint, EmbroideryRegion, VectorContourSet } from "./api";
+import { api, EmbroideryKind, EmbroideryPoint, EmbroideryRegion, VectorContourSet } from "./api";
 import { nearestThread, ThreadBrand } from "./thread-charts";
 
-export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:"auto"|"running"|"tatami"|"satin";embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number;assetId?:string};
+export type DigitizerEmbroideryKind="auto"|EmbroideryKind;
+export type DigitizerElement={id:string;type:"text"|"image";value:string;x:number;y:number;w:number;h:number;rotation:number;color:string;fontSize:number;fontFamily?:string;fontWeight?:number;fontStyle?:"normal"|"italic";letterSpacing?:number;strokeColor?:string;strokeWidth?:number;curveType?:"straight"|"circle";curveRadius?:number;curveSweep?:number;curveDirection?:"clockwise"|"counterclockwise";embroideryKind?:DigitizerEmbroideryKind;embroiderySpacing?:number;embroideryAngle?:number;embroideryUnderlay?:"auto"|"none"|"edge"|"center-zigzag";embroideryStitchLength?:number;embroideryFoamHeightMm?:2|3;assetId?:string};
 export type DigitizerView={canvasWidth:number;canvasHeight:number;physicalWidthMm:number;physicalHeightMm:number};
 export type Digitization={regions:EmbroideryRegion[];fallbacks:string[];threadLabels:Record<string,string>;vectorDiagnostics?:{code:string;message:string;severity:string}[]};
 
@@ -38,27 +39,44 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
           const kind=element.embroideryKind&&element.embroideryKind!=="auto"?element.embroideryKind:(autoSatin?"satin":"tatami");
           const underlay=element.embroideryUnderlay??"auto";
           const satin=kind==="satin";
+          const puff=kind==="puff";
+          const ownUnderlay=puff||kind==="applique"||kind==="sequin";
+          const columnLike=satin||puff||kind==="applique";
           const rings=layer.units==="mm"
             ? polygon
             : polygon.map(r=>r.map(p=>toPhysical(p,element,view)));
           // Skip islands thinner than one tatami row — they cannot produce fill stitches.
           // Measure the exterior only; holes are allowed to be finer.
           const minFeature=polygonMinFeatureMm(rings[0]?[rings[0]]:[]);
-          if(!satin&&minFeature>0&&minFeature<Math.max(0.8,spacingMm*1.5)){
+          if(puff&&minFeature>0&&minFeature<5){
             continue;
           }
-          regions.push({
+          if(!columnLike&&minFeature>0&&minFeature<Math.max(0.8,spacingMm*1.5)){
+            continue;
+          }
+          const region:EmbroideryRegion={
             id:`${element.id}-${layerIndex}-${regionIndex++}`,
             threadId:matched.hex,
             geometry:{rings},
             kind,
-            spacingMm,
             stitchLengthMm:element.embroideryStitchLength??3,
             angleDegrees:element.embroideryAngle??0,
-            edgeUnderlay:underlay==="edge"||(underlay==="auto"&&!satin),
-            centerUnderlay:underlay==="center-zigzag"||(underlay==="auto"&&satin),
-            zigzagUnderlay:underlay==="center-zigzag"||(underlay==="auto"&&satin),
-          });
+            edgeUnderlay:ownUnderlay?false:underlay==="edge"||(underlay==="auto"&&!satin),
+            centerUnderlay:ownUnderlay?false:underlay==="center-zigzag"||(underlay==="auto"&&satin),
+            zigzagUnderlay:ownUnderlay?false:underlay==="center-zigzag"||(underlay==="auto"&&satin),
+          };
+          if(puff){
+            region.foamHeightMm=element.embroideryFoamHeightMm===2?2:3;
+            // Omit spacing so the compiler applies foam-driven cover density.
+          }else if(kind==="applique"){
+            region.widthMm=2;
+            region.spacingMm=spacingMm;
+          }else if(kind==="sequin"){
+            region.spacingMm=Math.max(spacingMm,4);
+          }else{
+            region.spacingMm=spacingMm;
+          }
+          regions.push(region);
         }
       }
     }catch(error){

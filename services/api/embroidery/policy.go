@@ -88,13 +88,54 @@ func ProfileFor(class FabricClass) FabricProfile {
 
 // ApplyFabricProfile fills missing density/underlay from the fabric class.
 // Explicit non-zero spacing and already-enabled underlay flags are preserved.
+// Puff regions never receive soft fabric underlay; foam cover density is set in puff().
 func ApplyFabricProfile(regions []Region, class FabricClass) ([]Region, FabricProfile) {
 	profile := ProfileFor(class)
 	out := make([]Region, len(regions))
 	for i, r := range regions {
 		out[i] = r
+		if out[i].Kind == Puff {
+			if out[i].FoamHeightMM <= 0 {
+				out[i].FoamHeightMM = FoamHeight3MM
+			}
+			out[i].EdgeUnderlay = false
+			out[i].CenterUnderlay = false
+			out[i].ZigzagUnderlay = false
+			// Leave SpacingMM unset (0) so puff() applies foam-driven cover density,
+			// unless the digitizer/user already chose an explicit spacing.
+			if out[i].StitchLengthMM <= 0 {
+				out[i].StitchLengthMM = 3
+			}
+			continue
+		}
+		if managesOwnUnderlay(out[i].Kind) {
+			out[i].EdgeUnderlay = false
+			out[i].CenterUnderlay = false
+			out[i].ZigzagUnderlay = false
+			if out[i].StitchLengthMM <= 0 {
+				out[i].StitchLengthMM = 3
+			}
+			if out[i].Kind == Applique && out[i].WidthMM <= 0 {
+				out[i].WidthMM = DefaultAppliqueCoverMM
+			}
+			if out[i].Kind == Sequin && out[i].SpacingMM <= 0 {
+				out[i].SpacingMM = 5
+			}
+			continue
+		}
 		if out[i].SpacingMM <= 0 {
-			out[i].SpacingMM = profile.DensityMM
+			switch out[i].Kind {
+			case Motif, Cross:
+				out[i].SpacingMM = 2.5
+			case Contour:
+				out[i].SpacingMM = 1.2
+			case Chenille:
+				out[i].SpacingMM = 0.8
+			case Cord, Estitch, Bean:
+				// Outline kinds do not need fill density defaults.
+			default:
+				out[i].SpacingMM = profile.DensityMM
+			}
 		}
 		if out[i].StitchLengthMM <= 0 {
 			out[i].StitchLengthMM = 3
@@ -107,7 +148,7 @@ func ApplyFabricProfile(regions []Region, class FabricClass) ([]Region, FabricPr
 				if profile.PreferZigzag {
 					out[i].ZigzagUnderlay = true
 				}
-			case Tatami, Running:
+			case Tatami, Running, Bean, Motif, Contour, Cross, Estitch, Cord, Chenille:
 				if profile.PreferEdgeUnderlay {
 					out[i].EdgeUnderlay = true
 				}
@@ -117,15 +158,18 @@ func ApplyFabricProfile(regions []Region, class FabricClass) ([]Region, FabricPr
 		if profile.PreferZigzag && out[i].Kind == Satin && out[i].CenterUnderlay {
 			out[i].ZigzagUnderlay = true
 		}
-		if profile.PreferEdgeUnderlay && (out[i].Kind == Tatami || out[i].Kind == Running) {
-			out[i].EdgeUnderlay = true
+		if profile.PreferEdgeUnderlay {
+			switch out[i].Kind {
+			case Tatami, Running, Bean, Motif, Contour, Cross, Estitch, Cord, Chenille:
+				out[i].EdgeUnderlay = true
+			}
 		}
 	}
 	return out, profile
 }
 
 func estimateSatinWidthMM(r Region) float64 {
-	if r.Kind != Satin {
+	if r.Kind != Satin && r.Kind != Puff && r.Kind != Applique {
 		return 0
 	}
 	if r.WidthMM > 0 {
@@ -199,10 +243,19 @@ func estimateLetterHeightMM(r Region) float64 {
 	return h
 }
 
+func usesFlatFillDensity(k StitchKind) bool {
+	switch k {
+	case Tatami, Satin:
+		return true
+	default:
+		return false
+	}
+}
+
 func densestSpacing(regions []Region) float64 {
 	best := 0.0
 	for _, r := range regions {
-		if r.SpacingMM <= 0 {
+		if !usesFlatFillDensity(r.Kind) || r.SpacingMM <= 0 {
 			continue
 		}
 		if best == 0 || r.SpacingMM < best {
@@ -233,6 +286,28 @@ func PolicyValidate(regions []Region, fabric FabricProfile) []Diagnostic {
 		out = append(out, Diagnostic{Severity: s, Code: code, Message: msg, RegionID: region})
 	}
 	for _, r := range regions {
+		if r.Kind == Puff {
+			foam := r.FoamHeightMM
+			if foam != FoamHeight2MM && foam != FoamHeight3MM {
+				add(Error, "PUFF_FOAM_INVALID", fmt.Sprintf("puff foam height must be 2 or 3 mm (got %.2f)", foam), r.ID)
+				continue
+			}
+			if r.EdgeUnderlay || r.CenterUnderlay || r.ZigzagUnderlay {
+				add(Warning, "PUFF_UNDERLAY_IGNORED", "soft fabric underlay is disabled for puff so foam is not crushed", r.ID)
+			}
+			width := estimateSatinWidthMM(r)
+			if width > MaxPuffColumnMM {
+				add(Error, "PUFF_TOO_WIDE", fmt.Sprintf("puff column span %.1f mm exceeds %.0f mm badge limit", width, MaxPuffColumnMM), r.ID)
+			} else if width > 0 && width < 1.0 {
+				add(Error, "PUFF_TOO_NARROW", fmt.Sprintf("puff column span %.1f mm is too thin for foam cover", width), r.ID)
+			}
+			height := estimateLetterHeightMM(r)
+			if height > 0 && height < 5 {
+				add(Error, "TEXT_TOO_SMALL", fmt.Sprintf("puff feature height %.1f mm is below 5 mm", height), r.ID)
+			}
+			// Foam cover is intentionally denser than the flat 40 wt band.
+			continue
+		}
 		if r.Kind == Satin {
 			width := estimateSatinWidthMM(r)
 			if width > 10 {
@@ -249,7 +324,7 @@ func PolicyValidate(regions []Region, fabric FabricProfile) []Diagnostic {
 				add(Warning, "TEXT_BORDERLINE", fmt.Sprintf("feature height %.1f mm is borderline for auto satin lettering", height), r.ID)
 			}
 		}
-		if r.SpacingMM > 0 && (r.SpacingMM < 0.35 || r.SpacingMM > 0.55) {
+		if usesFlatFillDensity(r.Kind) && r.SpacingMM > 0 && (r.SpacingMM < 0.35 || r.SpacingMM > 0.55) {
 			add(Warning, "DENSITY_OUT_OF_RANGE", fmt.Sprintf("density %.2f mm is outside the 0.35–0.55 mm production band for 40 wt", r.SpacingMM), r.ID)
 		}
 	}
@@ -293,18 +368,49 @@ func ScoreReview(regions []Region, fabric FabricProfile, diagnostics []Diagnosti
 	minText := math.Inf(1)
 	maxSatin := 0.0
 	needsDual := false
+	hasPuff := false
+	puffFoam := 0.0
+	hasApplique, hasSequin, hasCord, hasChenille := false, false, false, false
 	for _, r := range regions {
 		if h := estimateLetterHeightMM(r); h > 0 && h < minText {
 			minText = h
 		}
-		if r.Kind == Satin {
+		if r.Kind == Satin || r.Kind == Puff || r.Kind == Applique {
 			if w := estimateSatinWidthMM(r); w > maxSatin {
 				maxSatin = w
 			}
 		}
+		switch r.Kind {
+		case Puff:
+			hasPuff = true
+			puffFoam = NormalizeFoamHeight(r.FoamHeightMM)
+		case Applique:
+			hasApplique = true
+		case Sequin:
+			hasSequin = true
+		case Cord:
+			hasCord = true
+		case Chenille:
+			hasChenille = true
+		}
 		if dualUnderlay(r) {
 			needsDual = true
 		}
+	}
+	if hasPuff {
+		add("PUFF_FOAM", fmt.Sprintf("Puff foam %.0f mm — place, sew, tear away", puffFoam), 25)
+	}
+	if hasApplique {
+		add("APPLIQUE", "Appliqué placement / trim / cover", 20)
+	}
+	if hasSequin {
+		add("SEQUIN", "Sequin attach process", 25)
+	}
+	if hasCord {
+		add("CORD", "Cording attachment", 15)
+	}
+	if hasChenille {
+		add("CHENILLE", "Chenille / loop pile", 20)
 	}
 	if !math.IsInf(minText, 1) {
 		switch {

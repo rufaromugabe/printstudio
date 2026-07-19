@@ -24,7 +24,8 @@ export type ProductionMetrics = {
   requireIcc: boolean;
 };
 export type EmbroideryPoint={x:number;y:number};
-export type EmbroideryRegion={id:string;threadId:string;geometry:{rings:EmbroideryPoint[][]};kind:"running"|"tatami"|"satin";spacingMm?:number;stitchLengthMm?:number;angleDegrees?:number;widthMm?:number;edgeUnderlay?:boolean;centerUnderlay?:boolean;zigzagUnderlay?:boolean};
+export type EmbroideryKind="running"|"tatami"|"satin"|"puff"|"bean"|"applique"|"motif"|"contour"|"estitch"|"cross"|"sequin"|"cord"|"chenille";
+export type EmbroideryRegion={id:string;threadId:string;geometry:{rings:EmbroideryPoint[][]};kind:EmbroideryKind;spacingMm?:number;stitchLengthMm?:number;angleDegrees?:number;widthMm?:number;foamHeightMm?:number;edgeUnderlay?:boolean;centerUnderlay?:boolean;zigzagUnderlay?:boolean};
 export type EmbroideryFabricClass="woven"|"tshirt"|"pique"|"fleece"|"performance-knit";
 export type EmbroideryRequest={name:string;fabricClass?:EmbroideryFabricClass;regions:EmbroideryRegion[];machine:{id:string;name:string;hoopWidthMm:number;hoopHeightMm:number;maxStitches:number;maxColors:number;minStitchMm:number;maxStitchMm:number;maxJumpMm:number}};
 export type EmbroideryDiagnostic={severity:"error"|"warning";code:string;message:string;regionId:string};
