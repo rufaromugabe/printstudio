@@ -127,36 +127,50 @@ func VectorizeColor(ctx context.Context, img image.Image, opt VectorizeOptions, 
 	}
 
 	foregroundPixels := countMask(analysis.mask)
-	// Ignore speckly fringe buckets left after palette reduction; they are far too
-	// small to stitch/cut and previously hard-failed whole designs at QA.
-	minimumPixels := maxInt(24, foregroundPixels/500)
+	// Fold only tiny AA fringe buckets into the nearest larger spot so ink is
+	// preserved. Real secondary colours (even a few percent) still get traced.
+	minimumPixels := maxInt(8, foregroundPixels/4000)
+	folded := foldFringeColourClusters(masks, counts, sumR, sumG, sumB, clusters, minimumPixels, foregroundPixels)
+	if folded > 0 {
+		result.Diagnostics = append(result.Diagnostics, VectorDiagnostic{
+			Severity: "warning", Code: "COLOR_FRINGE_FOLDED",
+			Message: fmt.Sprintf("folded %d anti-alias fringe separation(s) into neighbouring spot colours", folded),
+		})
+	}
 	for cluster, mask := range masks {
-		coverage := float64(counts[cluster]) / float64(maxInt(1, foregroundPixels))
-		if counts[cluster] < minimumPixels || coverage < 0.01 {
-			if counts[cluster] > 0 {
-				result.Diagnostics = append(result.Diagnostics, VectorDiagnostic{
-					Severity: "warning", Code: "COLOR_LAYER_DROPPED",
-					Message: fmt.Sprintf("dropped a %.2f%% fringe colour separation (%d px) before tracing", coverage*100, counts[cluster]),
-				})
-			}
+		if counts[cluster] == 0 {
 			continue
 		}
+		coverage := float64(counts[cluster]) / float64(maxInt(1, foregroundPixels))
 		layerOpt := opt
 		layerOpt.Prep = nil
 		layerOpt.EnableOCR = false
-		layerOpt.IncludeProof = opt.IncludeProof && cluster == 0
+		layerOpt.IncludeProof = opt.IncludeProof && len(result.Layers) == 0
+		// Photo-inset seals re-classify each separation as flat/text and otherwise
+		// inherit embroidery's aggressive speckle rejection — keep detail.
+		if analysis.kind == ContentPhoto {
+			layerOpt.ForceContentKind = ContentPhoto
+		}
 		contours, traceErr := Vectorize(ctx, mask, layerOpt)
 		if traceErr != nil {
-			// Tiny residual separations can still fail component/recall gates after
-			// supersampling; keep the design alive when a major layer already exists.
-			if coverage < 0.05 && len(result.Layers) > 0 {
-				result.Diagnostics = append(result.Diagnostics, VectorDiagnostic{
-					Severity: "warning", Code: "COLOR_LAYER_SKIPPED",
-					Message: fmt.Sprintf("skipped unstable %.2f%% colour separation: %v", coverage*100, traceErr),
-				})
-				continue
+			if contours == nil || contours.PathCount == 0 {
+				return result, fmt.Errorf("colour layer %d failed: %w", cluster+1, traceErr)
 			}
-			return result, fmt.Errorf("colour layer %d failed: %w", cluster+1, traceErr)
+			// Keep traced ink even when bookkeeping QA fails — dropping layers is
+			// what made complex logos look hollow.
+			qa := firstVectorError(contours.Diagnostics)
+			for i := range contours.Diagnostics {
+				if contours.Diagnostics[i].Severity == "error" {
+					contours.Diagnostics[i].Severity = "warning"
+				}
+			}
+			if contours.Similarity.Status == "fail" {
+				contours.Similarity.Status = "review"
+			}
+			result.Diagnostics = append(result.Diagnostics, VectorDiagnostic{
+				Severity: "warning", Code: "COLOR_LAYER_REVIEW",
+				Message: fmt.Sprintf("kept colour layer %d with review-level QA (%s)", cluster+1, qa),
+			})
 		}
 		layerColor := averageHex(sumR[cluster], sumG[cluster], sumB[cluster], counts[cluster])
 		result.Layers = append(result.Layers, ColorVectorLayer{
@@ -246,6 +260,67 @@ func clusterLabBuckets(buckets []labBucket, maxColors int) []labCluster {
 	}
 	sort.Slice(centers, func(i, j int) bool { return centers[i].count > centers[j].count })
 	return centers
+}
+
+func foldFringeColourClusters(masks []*image.Alpha, counts []int, sumR, sumG, sumB []float64, clusters []labCluster, minimumPixels, foregroundPixels int) int {
+	if len(masks) == 0 || foregroundPixels <= 0 {
+		return 0
+	}
+	keep := make([]bool, len(clusters))
+	kept := 0
+	for i := range clusters {
+		coverage := float64(counts[i]) / float64(foregroundPixels)
+		if counts[i] >= minimumPixels && coverage >= 0.002 {
+			keep[i] = true
+			kept++
+		}
+	}
+	if kept == 0 {
+		// Always retain the largest bucket so folding has a destination.
+		best := 0
+		for i := 1; i < len(counts); i++ {
+			if counts[i] > counts[best] {
+				best = i
+			}
+		}
+		keep[best] = true
+	}
+	folded := 0
+	for from := range clusters {
+		if keep[from] || counts[from] == 0 {
+			continue
+		}
+		to := -1
+		best := math.Inf(1)
+		for candidate := range clusters {
+			if !keep[candidate] {
+				continue
+			}
+			distance := labDistanceSquared(clusters[from].lab, clusters[candidate].lab)
+			if distance < best {
+				best = distance
+				to = candidate
+			}
+		}
+		if to < 0 {
+			continue
+		}
+		mask := masks[from]
+		for i, value := range mask.Pix {
+			if value == 0 {
+				continue
+			}
+			masks[to].Pix[i] = 255
+			mask.Pix[i] = 0
+		}
+		counts[to] += counts[from]
+		sumR[to] += sumR[from]
+		sumG[to] += sumG[from]
+		sumB[to] += sumB[from]
+		counts[from], sumR[from], sumG[from], sumB[from] = 0, 0, 0, 0
+		folded++
+	}
+	return folded
 }
 
 func mergeLabClusters(clusters []labCluster, threshold float64) []labCluster {

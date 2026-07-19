@@ -70,8 +70,20 @@ func EvaluateVectorSimilarity(source image.Image, rings [][]VectorPoint, content
 	missingCounters := maxInt(0, sourceCounters-tracedCounters)
 
 	score := int(math.Round(100 * (0.45*iou + 0.2*precision + 0.2*recall + 0.15*edgeF1)))
-	score -= minInt(20, missingComponents*4)
-	score -= minInt(24, missingCounters*8)
+	// Supersampled complex seals often report many more source speckles than
+	// traced islands even when fill overlap is excellent. Only levy the heavy
+	// component/counter penalty when the geometry itself is weak.
+	strongGeometry := iou >= 0.92 && recall >= 0.92
+	if !strongGeometry {
+		score -= minInt(20, missingComponents*4)
+	} else if missingComponents > 0 {
+		score -= minInt(6, missingComponents)
+	}
+	if contentKind == ContentTextLike || !strongGeometry {
+		score -= minInt(24, missingCounters*8)
+	} else if missingCounters > 0 {
+		score -= minInt(8, missingCounters*2)
+	}
 	score = maxInt(0, minInt(100, score))
 	failAt, reviewAt := 76, 90
 	if contentKind == ContentTextLike {
@@ -80,7 +92,7 @@ func EvaluateVectorSimilarity(source image.Image, rings [][]VectorPoint, content
 	status := "pass"
 	if score < failAt || recall < 0.78 || (contentKind == ContentTextLike && missingCounters > 0) {
 		status = "fail"
-	} else if score < reviewAt || recall < 0.9 || missingComponents > 0 {
+	} else if score < reviewAt || recall < 0.9 || missingComponents > 0 || missingCounters > 0 {
 		status = "review"
 	}
 	report := VectorSimilarityReport{
@@ -102,7 +114,13 @@ func EvaluateVectorSimilarity(source image.Image, rings [][]VectorPoint, content
 		diagnostics = append(diagnostics, VectorDiagnostic{Severity: "warning", Code: "SIMILARITY_REVIEW", Message: similarityMessage(report)})
 	}
 	if missingCounters > 0 {
-		diagnostics = append(diagnostics, VectorDiagnostic{Severity: "error", Code: "COUNTERS_LOST", Message: "vector proof lost one or more enclosed counters; raster lettering must be repaired or rebuilt as editable text"})
+		severity := "warning"
+		message := "vector proof lost one or more enclosed counters; review cutouts before production"
+		if contentKind == ContentTextLike {
+			severity = "error"
+			message = "vector proof lost one or more enclosed counters; raster lettering must be repaired or rebuilt as editable text"
+		}
+		diagnostics = append(diagnostics, VectorDiagnostic{Severity: severity, Code: "COUNTERS_LOST", Message: message})
 	}
 	return report, diagnostics
 }

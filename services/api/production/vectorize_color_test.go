@@ -36,7 +36,7 @@ func TestMergeLabClustersAbsorbsAntiAliasFringe(t *testing.T) {
 	}
 }
 
-func TestVectorizeColorDropsSpecklyFringeLayer(t *testing.T) {
+func TestVectorizeColorFoldsSpecklyFringeIntoSpotLayers(t *testing.T) {
 	potrace := os.Getenv("POTRACE_BIN")
 	if potrace == "" {
 		var err error
@@ -88,5 +88,26 @@ func TestClassifyKeepsChunkyLogoAsFlatArt(t *testing.T) {
 	kind, _ = classifyVectorContent(true, 0.273, 0.04, 3, 1)
 	if kind != ContentTextLike {
 		t.Fatalf("three opaque letter stems should stay text-like, got %q", kind)
+	}
+	kind, _ = classifyVectorContent(true, 0.26, 0.03, 38, 71)
+	if kind != ContentPhoto {
+		t.Fatalf("photo-inset seal should classify as photo, got %q", kind)
+	}
+}
+
+func TestVectorSimilarityHighIoUIgnoresSpeckleComponentPenalty(t *testing.T) {
+	img := solidSquare(64, 8, 8, 48)
+	// Faithful outer contour; missingComponents are synthetic via the report path
+	// by comparing against a source that has extra isolated pixels.
+	img.SetNRGBA(2, 2, color.NRGBA{A: 255})
+	img.SetNRGBA(3, 2, color.NRGBA{A: 255})
+	img.SetNRGBA(60, 60, color.NRGBA{A: 255})
+	rings := [][]VectorPoint{{{8, 8}, {56, 8}, {56, 56}, {8, 56}}}
+	report, diagnostics := EvaluateVectorSimilarity(img, rings, ContentFlatArt, false)
+	if report.Status == "fail" || report.Score < 90 {
+		t.Fatalf("high-overlap trace should not hard-fail on speckles: %+v diagnostics=%+v", report, diagnostics)
+	}
+	if HasVectorErrors(diagnostics) {
+		t.Fatalf("flat-art counter/component bookkeeping must not hard-error when geometry is strong: %+v", diagnostics)
 	}
 }

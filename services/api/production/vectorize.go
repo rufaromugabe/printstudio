@@ -64,15 +64,16 @@ type VectorizePlacement struct {
 }
 
 type VectorizeOptions struct {
-	Method       string // vinyl|embroidery|screen
-	AlphaCutoff  uint8
-	MLPrep       bool
-	Placement    *VectorizePlacement
-	Tools        NativeTools
-	Prep         ImagePrep // optional; nil uses passthrough
-	MaxPaths     int
-	IncludeProof bool
-	EnableOCR    bool
+	Method           string // vinyl|embroidery|screen
+	AlphaCutoff      uint8
+	MLPrep           bool
+	Placement        *VectorizePlacement
+	Tools            NativeTools
+	Prep             ImagePrep // optional; nil uses passthrough
+	MaxPaths         int
+	IncludeProof     bool
+	EnableOCR        bool
+	ForceContentKind string // optional override for colour separations of photo artwork
 }
 
 // ImagePrep is the ML/cleanup stage before Potrace.
@@ -113,7 +114,7 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		tracer = TracerPotrace
 	}
 
-	traceMask, prepMeta, qualityProfile, err := prepareVectorMask(prepared, opt.Method, opt.AlphaCutoff)
+	traceMask, prepMeta, qualityProfile, err := prepareVectorMask(prepared, opt.Method, opt.AlphaCutoff, opt.ForceContentKind)
 	if err != nil {
 		return nil, fmt.Errorf("content-aware prep: %w", err)
 	}
@@ -460,7 +461,7 @@ func methodFeatureThresholds(method, units string) (warnAt, rejectAt float64) {
 	case "vinyl":
 		return 0.6, 0.25
 	case "embroidery":
-		return 0.8, 0.35
+		return 0.5, 0.2
 	case "screen":
 		return 0.4, 0.15
 	case "dtf":

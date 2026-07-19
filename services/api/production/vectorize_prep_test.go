@@ -47,7 +47,7 @@ func TestPrepareVectorMaskSupersamplesSmallText(t *testing.T) {
 			}
 		}
 	}
-	mask, metadata, profile, err := prepareVectorMask(img, "vinyl", DefaultAlphaCutoff)
+	mask, metadata, profile, err := prepareVectorMask(img, "vinyl", DefaultAlphaCutoff, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,13 +61,20 @@ type vectorQualityProfile struct {
 	simplifyTolerance float64
 }
 
-func prepareVectorMask(img image.Image, method string, alphaCutoff uint8) (image.Image, VectorPrepMetadata, vectorQualityProfile, error) {
+func prepareVectorMask(img image.Image, method string, alphaCutoff uint8, forceContentKind string) (image.Image, VectorPrepMetadata, vectorQualityProfile, error) {
 	analysis, err := analyzeVectorArtwork(img, alphaCutoff)
 	if err != nil {
 		return nil, VectorPrepMetadata{}, vectorQualityProfile{}, err
 	}
-	profile := vectorProfile(method, analysis.kind)
+	kind := analysis.kind
+	if forceContentKind == ContentTextLike || forceContentKind == ContentFlatArt || forceContentKind == ContentPhoto {
+		kind = forceContentKind
+	}
+	profile := vectorProfile(method, kind)
 	steps := []string{"classified raster as " + analysis.kind}
+	if kind != analysis.kind {
+		steps = append(steps, "applied "+kind+" detail profile for colour separation")
+	}
 	if analysis.backgroundRemoved {
 		steps = append(steps, "isolated foreground from the border background")
 	} else {
@@ -78,7 +85,7 @@ func prepareVectorMask(img image.Image, method string, alphaCutoff uint8) (image
 	mask = healMaskDefects(mask, analysis.width, analysis.height, profile.healNeighborCount)
 	steps = append(steps, "removed speckles and repaired one-pixel edge defects")
 
-	factor := vectorUpscaleFactor(analysis.width, analysis.height, analysis.kind)
+	factor := vectorUpscaleFactor(analysis.width, analysis.height, kind)
 	mask, width, height := upscaleVectorMask(mask, analysis.width, analysis.height, factor, profile.maskThreshold)
 	if factor > 1 {
 		steps = append(steps, fmt.Sprintf("edge-aware %dx supersampling before trace", factor))
@@ -95,7 +102,7 @@ func prepareVectorMask(img image.Image, method string, alphaCutoff uint8) (image
 		}
 	}
 	meta := VectorPrepMetadata{
-		ContentKind:       analysis.kind,
+		ContentKind:       kind,
 		Confidence:        roundTo(analysis.confidence, 3),
 		MaskSource:        analysis.maskSource,
 		InputWidthPx:      analysis.width,
@@ -217,11 +224,17 @@ func analyzeVectorArtwork(img image.Image, alphaCutoff uint8) (vectorArtworkAnal
 }
 
 func classifyVectorContent(hasAlpha bool, foregroundRatio, edgeDensity float64, components, colors int) (string, float64) {
+	// Continuous-tone / photo-inset artwork first. Transparent PNG seals with a
+	// saint photo + ring text used to match the lettering heuristic via hasAlpha
+	// and then hard-fail counter/component gates despite excellent fill fidelity.
+	if colors > 64 || edgeDensity > 0.2 {
+		return ContentPhoto, 0.78
+	}
 	// Several discrete, relatively sparse components are characteristic of
 	// rasterized words. This changes cleanup, never the actual character data.
 	// Chunky multi-island logos (large average component area) stay on the
 	// flat-art path so counter/similarity gates are not over-tightened.
-	if components >= 2 && components <= 300 && foregroundRatio >= 0.003 && foregroundRatio < 0.62 && (colors <= 24 || hasAlpha) {
+	if components >= 2 && components <= 300 && foregroundRatio >= 0.003 && foregroundRatio < 0.62 && colors <= 24 {
 		avgComponent := foregroundRatio / float64(components)
 		if components >= 4 || avgComponent < 0.1 {
 			return ContentTextLike, 0.86
@@ -229,9 +242,6 @@ func classifyVectorContent(hasAlpha bool, foregroundRatio, edgeDensity float64, 
 	}
 	if colors <= 32 && (hasAlpha || edgeDensity < 0.18) {
 		return ContentFlatArt, 0.9
-	}
-	if colors > 64 || edgeDensity > 0.2 {
-		return ContentPhoto, 0.78
 	}
 	return ContentFlatArt, 0.72
 }
@@ -250,11 +260,11 @@ func vectorProfile(method, contentKind string) vectorQualityProfile {
 		profile.simplifyTolerance = 0.08
 	case "embroidery":
 		profile.name = "embroidery-stitch-stable"
-		profile.trace = TraceOptions{TurdSize: 5, AlphaMax: 1.0, OptTolerance: 0.24, TurnPolicy: "majority"}
+		profile.trace = TraceOptions{TurdSize: 3, AlphaMax: 1.0, OptTolerance: 0.2, TurnPolicy: "majority"}
 		profile.maskThreshold = 116
-		profile.minComponentArea = 5
+		profile.minComponentArea = 2
 		profile.healNeighborCount = 6
-		profile.simplifyTolerance = 0.18
+		profile.simplifyTolerance = 0.14
 	case "screen":
 		profile.name = "screen-separation-clean"
 		profile.trace = TraceOptions{TurdSize: 2, AlphaMax: 0.9, OptTolerance: 0.14, TurnPolicy: "minority"}
@@ -274,6 +284,8 @@ func vectorProfile(method, contentKind string) vectorQualityProfile {
 		profile.name += "-detail"
 		profile.trace.TurdSize = maxInt(1, profile.trace.TurdSize/2)
 		profile.trace.OptTolerance = math.Min(profile.trace.OptTolerance, 0.1)
+		profile.minComponentArea = 1
+		profile.simplifyTolerance = math.Min(profile.simplifyTolerance, 0.1)
 	}
 	return profile
 }
