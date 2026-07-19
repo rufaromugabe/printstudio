@@ -219,8 +219,13 @@ func analyzeVectorArtwork(img image.Image, alphaCutoff uint8) (vectorArtworkAnal
 func classifyVectorContent(hasAlpha bool, foregroundRatio, edgeDensity float64, components, colors int) (string, float64) {
 	// Several discrete, relatively sparse components are characteristic of
 	// rasterized words. This changes cleanup, never the actual character data.
+	// Chunky multi-island logos (large average component area) stay on the
+	// flat-art path so counter/similarity gates are not over-tightened.
 	if components >= 2 && components <= 300 && foregroundRatio >= 0.003 && foregroundRatio < 0.62 && (colors <= 24 || hasAlpha) {
-		return ContentTextLike, 0.86
+		avgComponent := foregroundRatio / float64(components)
+		if components >= 4 || avgComponent < 0.1 {
+			return ContentTextLike, 0.86
+		}
 	}
 	if colors <= 32 && (hasAlpha || edgeDensity < 0.18) {
 		return ContentFlatArt, 0.9
@@ -440,28 +445,80 @@ func polishVectorRings(rings [][]VectorPoint, tolerance float64) ([][]VectorPoin
 	out := make([][]VectorPoint, 0, len(rings))
 	removed := 0
 	for _, ring := range rings {
-		clean := removeNearDuplicatePoints(ring, tolerance/4)
-		for pass := 0; pass < 3 && len(clean) > 3; pass++ {
-			next := make([]VectorPoint, 0, len(clean))
-			for i, point := range clean {
-				previous := clean[(i+len(clean)-1)%len(clean)]
-				following := clean[(i+1)%len(clean)]
-				if pointSegmentDistance(point, previous, following) <= tolerance {
-					removed++
-					continue
-				}
-				next = append(next, point)
-			}
-			if len(next) < 3 || len(next) == len(clean) {
-				break
-			}
-			clean = next
+		clean := removeNearDuplicatePoints(ring, math.Max(1e-6, tolerance/4))
+		if len(clean) < 3 {
+			continue
 		}
-		if len(clean) >= 3 {
-			out = append(out, clean)
+		// Ramer–Douglas–Peucker on the closed ring. The previous parallel
+		// "drop every locally flat vertex" pass collapsed dense curves after
+		// supersampling because every sample looked colinear with its
+		// immediate neighbours, nuking whole arcs in a single sweep.
+		simplified := simplifyClosedRingRDP(clean, tolerance)
+		if len(simplified) < 3 {
+			simplified = clean
 		}
+		removed += len(clean) - len(simplified)
+		out = append(out, simplified)
 	}
 	return out, removed
+}
+
+func simplifyClosedRingRDP(ring []VectorPoint, tolerance float64) []VectorPoint {
+	n := len(ring)
+	if n < 4 || tolerance <= 0 {
+		return ring
+	}
+	keep := make([]bool, n)
+	// Anchor opposite extremes of the ring so the closed loop has a stable
+	// chord before recursive RDP. Bounding-box extrema are O(n) and enough
+	// to keep both halves of logos/letterforms from collapsing.
+	a, b := 0, 0
+	for i := 1; i < n; i++ {
+		if ring[i].X < ring[a].X || (ring[i].X == ring[a].X && ring[i].Y < ring[a].Y) {
+			a = i
+		}
+		if ring[i].X > ring[b].X || (ring[i].X == ring[b].X && ring[i].Y > ring[b].Y) {
+			b = i
+		}
+	}
+	if a == b {
+		b = (a + n/2) % n
+	}
+	keep[a], keep[b] = true, true
+	rdpMark(ring, a, b, tolerance, keep)
+	rdpMark(ring, b, a, tolerance, keep)
+	out := make([]VectorPoint, 0, n)
+	for i, on := range keep {
+		if on {
+			out = append(out, ring[i])
+		}
+	}
+	if len(out) < 3 {
+		return ring
+	}
+	return out
+}
+
+func rdpMark(ring []VectorPoint, start, end int, tolerance float64, keep []bool) {
+	n := len(ring)
+	if n == 0 || start == end {
+		return
+	}
+	maxDist := -1.0
+	farthest := -1
+	for i := (start + 1) % n; i != end; i = (i + 1) % n {
+		dist := pointSegmentDistance(ring[i], ring[start], ring[end])
+		if dist > maxDist {
+			maxDist = dist
+			farthest = i
+		}
+	}
+	if farthest < 0 || maxDist <= tolerance {
+		return
+	}
+	keep[farthest] = true
+	rdpMark(ring, start, farthest, tolerance, keep)
+	rdpMark(ring, farthest, end, tolerance, keep)
 }
 
 func removeNearDuplicatePoints(ring []VectorPoint, tolerance float64) []VectorPoint {

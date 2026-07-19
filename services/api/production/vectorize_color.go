@@ -79,7 +79,9 @@ func VectorizeColor(ctx context.Context, img image.Image, opt VectorizeOptions, 
 		return nil, fmt.Errorf("no opaque colours remained after foreground isolation")
 	}
 	clusters := clusterLabBuckets(buckets, maxColors)
-	clusters = mergeLabClusters(clusters, 3.0)
+	// ΔE00 ≈ 5 absorbs anti-aliased fringe clusters into their parent spot
+	// without merging distinct brand colours (typical logo pairs sit well above 15).
+	clusters = mergeLabClusters(clusters, 5.0)
 	if len(clusters) == 0 {
 		return nil, fmt.Errorf("colour clustering produced no separations")
 	}
@@ -125,9 +127,18 @@ func VectorizeColor(ctx context.Context, img image.Image, opt VectorizeOptions, 
 	}
 
 	foregroundPixels := countMask(analysis.mask)
-	minimumPixels := maxInt(6, foregroundPixels/20_000)
+	// Ignore speckly fringe buckets left after palette reduction; they are far too
+	// small to stitch/cut and previously hard-failed whole designs at QA.
+	minimumPixels := maxInt(24, foregroundPixels/500)
 	for cluster, mask := range masks {
-		if counts[cluster] < minimumPixels {
+		coverage := float64(counts[cluster]) / float64(maxInt(1, foregroundPixels))
+		if counts[cluster] < minimumPixels || coverage < 0.01 {
+			if counts[cluster] > 0 {
+				result.Diagnostics = append(result.Diagnostics, VectorDiagnostic{
+					Severity: "warning", Code: "COLOR_LAYER_DROPPED",
+					Message: fmt.Sprintf("dropped a %.2f%% fringe colour separation (%d px) before tracing", coverage*100, counts[cluster]),
+				})
+			}
 			continue
 		}
 		layerOpt := opt
@@ -136,11 +147,20 @@ func VectorizeColor(ctx context.Context, img image.Image, opt VectorizeOptions, 
 		layerOpt.IncludeProof = opt.IncludeProof && cluster == 0
 		contours, traceErr := Vectorize(ctx, mask, layerOpt)
 		if traceErr != nil {
+			// Tiny residual separations can still fail component/recall gates after
+			// supersampling; keep the design alive when a major layer already exists.
+			if coverage < 0.05 && len(result.Layers) > 0 {
+				result.Diagnostics = append(result.Diagnostics, VectorDiagnostic{
+					Severity: "warning", Code: "COLOR_LAYER_SKIPPED",
+					Message: fmt.Sprintf("skipped unstable %.2f%% colour separation: %v", coverage*100, traceErr),
+				})
+				continue
+			}
 			return result, fmt.Errorf("colour layer %d failed: %w", cluster+1, traceErr)
 		}
 		layerColor := averageHex(sumR[cluster], sumG[cluster], sumB[cluster], counts[cluster])
 		result.Layers = append(result.Layers, ColorVectorLayer{
-			Color: layerColor, PixelCount: counts[cluster], Coverage: roundTo(float64(counts[cluster])/float64(foregroundPixels), 4), Contours: *contours,
+			Color: layerColor, PixelCount: counts[cluster], Coverage: roundTo(coverage, 4), Contours: *contours,
 		})
 	}
 	if len(result.Layers) == 0 {

@@ -3,6 +3,7 @@ package production
 import (
 	"image"
 	"image/color"
+	"math"
 	"slices"
 	"testing"
 )
@@ -85,6 +86,34 @@ func TestPolishVectorRingsPreservesCorners(t *testing.T) {
 	}
 	if len(polished[0]) != 4 {
 		t.Fatalf("square corners should remain, got %d points: %#v", len(polished[0]), polished[0])
+	}
+}
+
+func TestPolishVectorRingsPreservesDenseCurves(t *testing.T) {
+	// Dense samples along a semicircle used to vanish when every locally flat
+	// vertex was dropped in one parallel pass after supersampling.
+	const n = 180
+	ring := make([]VectorPoint, 0, n+2)
+	for i := 0; i <= n; i++ {
+		theta := math.Pi * float64(i) / float64(n)
+		ring = append(ring, VectorPoint{X: 50 + 40*math.Cos(theta), Y: 50 + 40*math.Sin(theta)})
+	}
+	ring = append(ring, VectorPoint{X: 10, Y: 50}, VectorPoint{X: 90, Y: 50})
+	polished, removed := polishVectorRings([][]VectorPoint{ring}, 0.25)
+	if len(polished) != 1 {
+		t.Fatalf("expected one polished ring, got %d", len(polished))
+	}
+	if removed == 0 || len(polished[0]) >= len(ring) {
+		t.Fatalf("expected some densifying samples to be removed, removed=%d points=%d", removed, len(polished[0]))
+	}
+	if len(polished[0]) < 8 {
+		t.Fatalf("dense curve collapsed to a chord under polish: points=%d", len(polished[0]))
+	}
+	// Area should stay within ~5% of the original semicircle bowl.
+	orig := math.Abs(signedArea(ring))
+	got := math.Abs(signedArea(polished[0]))
+	if got < orig*0.95 || got > orig*1.05 {
+		t.Fatalf("polished curve area drifted too far: orig=%.1f got=%.1f points=%d", orig, got, len(polished[0]))
 	}
 }
 
@@ -207,7 +236,7 @@ func TestServerLabPalettePreservesFlatSpotColors(t *testing.T) {
 		}
 	}
 	buckets := buildLabBuckets(img, mask, 80, 40)
-	clusters := mergeLabClusters(clusterLabBuckets(buckets, 8), 3)
+	clusters := mergeLabClusters(clusterLabBuckets(buckets, 8), 5)
 	report := evaluateColorSimilarity(buckets, clusters, 8)
 	if len(clusters) != 2 || report.Status != "pass" || report.MeanDeltaE > 0.5 {
 		t.Fatalf("flat two-colour artwork should survive server clustering: clusters=%#v report=%+v", clusters, report)

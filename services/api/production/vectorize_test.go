@@ -175,6 +175,40 @@ func TestVectorizeDropsSpeckleNoise(t *testing.T) {
 	}
 }
 
+func TestVectorizeCurvedLogoSurvivesSupersamplePolish(t *testing.T) {
+	potrace := os.Getenv("POTRACE_BIN")
+	if potrace == "" {
+		var err error
+		potrace, err = exec.LookPath("potrace")
+		if err != nil {
+			t.Skip("potrace not installed")
+		}
+	}
+	// ~500px artwork triggers 3× supersampling. Parallel local polish used to
+	// flatten the dense post-upscale curves and fail similarity (~55 IoU).
+	img := image.NewNRGBA(image.Rect(0, 0, 520, 420))
+	for y := 0; y < 420; y++ {
+		for x := 0; x < 520; x++ {
+			dx, dy := float64(x)-260, float64(y)-210
+			if dx*dx/(190*190)+dy*dy/(140*140) <= 1 && dx*dx/(120*120)+dy*dy/(80*80) >= 1 {
+				img.SetNRGBA(x, y, color.NRGBA{R: 20, G: 80, B: 200, A: 255})
+			}
+		}
+	}
+	set, err := Vectorize(context.Background(), img, VectorizeOptions{
+		Method: "embroidery", Tools: NativeTools{Potrace: potrace},
+	})
+	if err != nil {
+		t.Fatalf("vectorize: %v diagnostics=%+v similarity=%+v", err, set.Diagnostics, set.Similarity)
+	}
+	if set.Similarity.Status != "pass" || set.Similarity.Score < 90 {
+		t.Fatalf("curved logo failed visual QA after supersample polish: %+v", set.Similarity)
+	}
+	if set.Prep.UpscaleFactor < 2 {
+		t.Fatalf("expected supersampling for this fixture, got %dx", set.Prep.UpscaleFactor)
+	}
+}
+
 func solidSquare(size, x0, y0, side int) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	for y := y0; y < y0+side; y++ {

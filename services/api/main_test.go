@@ -9,7 +9,8 @@ import (
 
 func TestCorsPreflight(t *testing.T) {
 	h := cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
-	r := httptest.NewRequest(http.MethodOptions, "/v1/designs", nil)
+	r := httptest.NewRequest(http.MethodOptions, "/v1/production/vectorize", nil)
+	r.Header.Set("Access-Control-Request-Headers", "content-type,x-printstudio-placement")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusNoContent {
@@ -17,6 +18,10 @@ func TestCorsPreflight(t *testing.T) {
 	}
 	if w.Header().Get("Access-Control-Allow-Origin") == "" {
 		t.Fatal("missing CORS header")
+	}
+	allowed := strings.ToLower(w.Header().Get("Access-Control-Allow-Headers"))
+	if !strings.Contains(allowed, "x-printstudio-placement") {
+		t.Fatalf("vectorize placement header must be CORS-allowed, got %q", allowed)
 	}
 }
 
