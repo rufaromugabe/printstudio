@@ -40,6 +40,9 @@ func bean(r Region) []Stitch {
 
 // applique builds placement run → tack-down → narrow cover satin, with an
 // operator pause note for fabric placement / trim.
+//
+// Cover uses a fixed-width perimeter column (not ring satin). Ring pairing on
+// traced artwork often invents long rungs that exceed MaxStitchMM.
 func applique(r Region, profile MachineProfile) ([]Stitch, []Stitch, error) {
 	if err := r.Geometry.Validate(); err != nil {
 		return nil, nil, err
@@ -48,33 +51,105 @@ func applique(r Region, profile MachineProfile) ([]Stitch, []Stitch, error) {
 	if coverW <= 0 {
 		coverW = DefaultAppliqueCoverMM
 	}
-	if coverW > profile.MaxStitchMM {
-		return nil, nil, fmt.Errorf("applique cover width %.2f mm exceeds machine maximum %.2f mm", coverW, profile.MaxStitchMM)
+	maxCover := profile.MaxStitchMM
+	if maxCover <= 0 {
+		maxCover = 12.1
+	}
+	// Keep cover bite practical for appliqué edges.
+	if maxCover > 4 {
+		maxCover = 4
+	}
+	if coverW > maxCover {
+		coverW = maxCover
+	}
+	if coverW < 1 {
+		coverW = 1
+	}
+	spacing := r.SpacingMM
+	if spacing <= 0 {
+		spacing = 0.4
 	}
 	exterior := r.Geometry.Rings[0]
+	poly := r.Geometry
 	placement := runningPath(exterior, max(r.StitchLengthMM, 2.5), "applique_placement")
-	inset := insetRing(exterior, coverW*0.45)
-	if len(inset) < 3 {
+	tackRing := offsetRingInward(exterior, poly, coverW*0.55)
+	if len(tackRing) < 3 {
 		return nil, nil, fmt.Errorf("applique shape is too small for a %.1f mm cover satin", coverW)
 	}
-	tack := runningPath(inset, max(r.StitchLengthMM, 2.0), "applique_tack")
+	tack := runningPath(tackRing, max(r.StitchLengthMM, 2.0), "applique_tack")
 	underlay := append(append([]Stitch{}, placement...), tack...)
-
-	cover := Region{
-		ID: r.ID, ThreadID: r.ThreadID, Kind: Satin,
-		Geometry:     Polygon{Rings: [][]Point{exterior, inset}},
-		SpacingMM:    max(r.SpacingMM, 0.4),
-		StitchLengthMM: r.StitchLengthMM,
-		CenterUnderlay: false, ZigzagUnderlay: false, EdgeUnderlay: false,
-	}
-	_, stitches, err := satin(cover, profile)
+	stitches, err := appliqueCover(exterior, poly, coverW, spacing)
 	if err != nil {
 		return nil, nil, fmt.Errorf("applique cover: %w", err)
 	}
-	for i := range stitches {
-		stitches[i].Source = "applique_cover"
-	}
 	return underlay, stitches, nil
+}
+
+// appliqueCover zigzags a constant-width satin along the exterior, biting inward.
+func appliqueCover(exterior []Point, poly Polygon, coverW, spacing float64) ([]Stitch, error) {
+	samples := resampleClosed(exterior, spacing)
+	if len(samples) < 3 {
+		return nil, fmt.Errorf("outline is too short for cover satin")
+	}
+	out := make([]Stitch, 0, len(samples)*2+2)
+	for i := 0; i < len(samples); i++ {
+		a := samples[i]
+		n := closedRingNormal(samples, i)
+		probe := Point{X: a.X + n.X*coverW*0.5, Y: a.Y + n.Y*coverW*0.5}
+		if !pointInPolygon(probe, poly) {
+			n = Point{X: -n.X, Y: -n.Y}
+		}
+		inner := Point{X: a.X + n.X*coverW, Y: a.Y + n.Y*coverW}
+		left, right := a, inner
+		if i%2 == 1 {
+			left, right = right, left
+		}
+		out = append(out,
+			Stitch{Position: left, Command: CommandStitch, Source: "applique_cover"},
+			Stitch{Position: right, Command: CommandStitch, Source: "applique_cover"},
+		)
+	}
+	// Close the column back to the start rail.
+	if len(out) > 0 {
+		out = append(out, Stitch{Position: samples[0], Command: CommandStitch, Source: "applique_cover"})
+	}
+	return out, nil
+}
+
+// offsetRingInward samples the ring and steps each point along the inward normal.
+func offsetRingInward(ring []Point, poly Polygon, dist float64) []Point {
+	if dist <= 0 {
+		return openPath(ring)
+	}
+	samples := resampleClosed(ring, math.Max(1.5, dist))
+	if len(samples) < 3 {
+		return nil
+	}
+	out := make([]Point, 0, len(samples))
+	for i, p := range samples {
+		n := closedRingNormal(samples, i)
+		probe := Point{X: p.X + n.X*dist*0.5, Y: p.Y + n.Y*dist*0.5}
+		if !pointInPolygon(probe, poly) {
+			n = Point{X: -n.X, Y: -n.Y}
+		}
+		out = append(out, Point{X: p.X + n.X*dist, Y: p.Y + n.Y*dist})
+	}
+	return out
+}
+
+func closedRingNormal(samples []Point, i int) Point {
+	n := len(samples)
+	if n < 2 {
+		return Point{X: 0, Y: 1}
+	}
+	prev := samples[(i+n-1)%n]
+	next := samples[(i+1)%n]
+	dir := Point{X: next.X - prev.X, Y: next.Y - prev.Y}
+	length := math.Hypot(dir.X, dir.Y)
+	if length < 1e-9 {
+		return Point{X: 0, Y: 1}
+	}
+	return Point{X: -dir.Y / length, Y: dir.X / length}
 }
 
 func appliqueOperatorMessage() string {

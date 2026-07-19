@@ -55,6 +55,29 @@ func TestAppliqueHasPlacementTackAndCover(t *testing.T) {
 	}
 }
 
+func TestAppliqueCoverStaysWithinMachineMax(t *testing.T) {
+	// Irregular traced-like outline that used to blow up ring-satin pairing.
+	poly := Polygon{Rings: [][]Point{{{
+		-20, -8}, {-8, -14}, {10, -12}, {22, -4}, {18, 10}, {0, 14}, {-18, 8}, {-22, 0},
+	}}}
+	d, err := Compile([]Region{{
+		ID: "logo", ThreadID: "black", Geometry: poly, Kind: Applique, SpacingMM: 0.4,
+	}}, DefaultProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sts := d.Plan[0].Stitches
+	for i := 1; i < len(sts); i++ {
+		if sts[i].Command != CommandStitch || sts[i-1].Command != CommandStitch {
+			continue
+		}
+		w := distance(sts[i-1].Position, sts[i].Position)
+		if w > 4.1 {
+			t.Fatalf("cover rung %.2f mm exceeds applique cover limit near stitch %d", w, i)
+		}
+	}
+}
+
 func TestMotifContourCrossCompile(t *testing.T) {
 	panel := rectangle(-12, -8, 24, 16)
 	for _, kind := range []StitchKind{Motif, Contour, Cross} {
