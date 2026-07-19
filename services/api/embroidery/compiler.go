@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 )
 
-const CompilerVersion = "0.5.0"
+const CompilerVersion = "0.6.0"
 
 func Compile(regions []Region, profile MachineProfile) (Document, error) {
 	return CompileWithFabric(regions, profile, FabricWoven)
@@ -28,7 +29,9 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 		Fabric  FabricClass  `json:"fabric"`
 	}{Regions: regions, Fabric: fabric.Class})
 	sum := sha256.Sum256(source)
+	regions, optimizeDiags := OptimizeRegions(regions, profile, fabric)
 	d := Document{Version: SchemaVersion, Units: "mm", SourceHash: hex.EncodeToString(sum[:]), CompilerVersion: CompilerVersion, Machine: profile, Fabric: fabric, Regions: regions}
+	d.Diagnostics = append(d.Diagnostics, optimizeDiags...)
 	for _, r := range regions {
 		if r.ID == "" {
 			return d, fmt.Errorf("region ID is required")
@@ -131,8 +134,23 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 			err = fmt.Errorf("unsupported stitch kind %q", r.Kind)
 		}
 		if err != nil {
-			return d, fmt.Errorf("region %s: %w", r.ID, err)
+			// Optimize instead of rejecting: rescue the region with a simpler
+			// stitch strategy and tell the operator what changed.
+			stitches, kind, ok := optimizedFallback(r, fabric, minStitch)
+			if !ok {
+				return d, fmt.Errorf("region %s: %w", r.ID, err)
+			}
+			block.Underlay = nil
+			block.Stitches = stitches
+			block.Kind = kind
+			d.Diagnostics = append(d.Diagnostics, Diagnostic{
+				Severity: Warning, Code: "AUTO_OPTIMIZED_" + strings.ToUpper(string(kind)), RegionID: r.ID,
+				Message: fmt.Sprintf("%s could not be stitched as designed (%v); compiled as %s instead", r.Kind, err, kind),
+			})
+			err = nil
 		}
+		block.Underlay = splitLongStitches(block.Underlay, profile.MaxStitchMM)
+		block.Stitches = splitLongStitches(block.Stitches, profile.MaxStitchMM)
 		block.Underlay = pruneShortStitches(block.Underlay, minStitch)
 		// Column / decorative pairs must keep short rungs; running/tatami/bean/contour are safe to prune.
 		if !keepShortStitches(r.Kind) {

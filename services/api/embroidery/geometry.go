@@ -73,6 +73,28 @@ func pruneShortStitches(stitches []Stitch, minLen float64) []Stitch {
 	return out
 }
 
+// splitLongStitches breaks needle moves longer than maxLen (machine maximum)
+// into interpolated stitches so long spans compile instead of hard-rejecting.
+func splitLongStitches(stitches []Stitch, maxLen float64) []Stitch {
+	if maxLen <= 0 || len(stitches) < 2 {
+		return stitches
+	}
+	out := make([]Stitch, 0, len(stitches))
+	out = append(out, stitches[0])
+	for i := 1; i < len(stitches); i++ {
+		s := stitches[i]
+		prev := out[len(out)-1]
+		if s.Command == CommandStitch && distance(prev.Position, s.Position) > maxLen {
+			for _, p := range interpolate(prev.Position, s.Position, maxLen) {
+				out = append(out, Stitch{Position: p, Command: CommandStitch, Source: s.Source})
+			}
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 func polygonBounds(p Polygon) Bounds {
 	b := Bounds{MinX: math.Inf(1), MinY: math.Inf(1), MaxX: math.Inf(-1), MaxY: math.Inf(-1)}
 	for _, r := range p.Rings {

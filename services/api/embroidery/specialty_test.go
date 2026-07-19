@@ -1,9 +1,6 @@
 package embroidery
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestBeanTriplesOutline(t *testing.T) {
 	d, err := Compile([]Region{{
@@ -156,7 +153,7 @@ func TestSpecialtyReviewFactors(t *testing.T) {
 	if !found {
 		t.Fatalf("expected APPLIQUE review factor: %+v", d.Review.Factors)
 	}
-	if !strings.Contains(d.CompilerVersion, "0.5") {
+	if d.CompilerVersion != CompilerVersion {
 		t.Fatalf("compiler version %s", d.CompilerVersion)
 	}
 }

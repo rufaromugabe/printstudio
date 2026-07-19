@@ -122,19 +122,43 @@ func TestSatinBuildsPairedRailsAndUnderlay(t *testing.T) {
 	}
 }
 
-func TestSatinRejectsUnsafeWidth(t *testing.T) {
-	_, err := Compile([]Region{{ID: "too-wide", ThreadID: "red", Geometry: rectangle(-10, -10, 20, 20), Kind: Satin, SpacingMM: .5}}, DefaultProfile())
-	if err == nil || !strings.Contains(err.Error(), "satin width") {
-		t.Fatalf("expected satin width error, got %v", err)
+func TestUnsafeSatinWidthOptimizesToTatami(t *testing.T) {
+	d, err := Compile([]Region{{ID: "too-wide", ThreadID: "red", Geometry: rectangle(-10, -10, 20, 20), Kind: Satin, SpacingMM: .5}}, DefaultProfile())
+	if err != nil {
+		t.Fatalf("wide satin should optimize, not reject: %v", err)
+	}
+	if len(d.Plan) != 1 || d.Plan[0].Kind != Tatami {
+		t.Fatalf("expected tatami conversion, got %+v", d.Plan)
+	}
+	if !hasDiagnostic(d.Diagnostics, "AUTO_SATIN_TO_TATAMI") {
+		t.Fatalf("expected AUTO_SATIN_TO_TATAMI diagnostic, got %+v", d.Diagnostics)
+	}
+	if HasErrors(d.Diagnostics) {
+		t.Fatalf("optimized document must not carry errors: %+v", d.Diagnostics)
 	}
 }
 
-func TestSatinRejectsBranchingHole(t *testing.T) {
+func TestBranchingHoleSatinOptimizesToTatami(t *testing.T) {
 	p := Polygon{Rings: [][]Point{{{-5, -10}, {5, -10}, {5, 10}, {-5, 10}}, {{-2, -6}, {2, -6}, {2, -3}, {-2, -3}}, {{-2, 3}, {2, 3}, {2, 6}, {-2, 6}}}}
-	_, err := Compile([]Region{{ID: "ambiguous", ThreadID: "red", Geometry: p, Kind: Satin, SpacingMM: .5}}, DefaultProfile())
-	if err == nil || !strings.Contains(err.Error(), "split it into editable columns") {
-		t.Fatalf("expected ambiguous rail error, got %v", err)
+	d, err := Compile([]Region{{ID: "ambiguous", ThreadID: "red", Geometry: p, Kind: Satin, SpacingMM: .5}}, DefaultProfile())
+	if err != nil {
+		t.Fatalf("branching satin should optimize, not reject: %v", err)
 	}
+	if len(d.Plan) != 1 || d.Plan[0].Kind != Tatami {
+		t.Fatalf("expected tatami conversion, got %+v", d.Plan)
+	}
+	if !hasDiagnostic(d.Diagnostics, "AUTO_SATIN_TO_TATAMI") {
+		t.Fatalf("expected AUTO_SATIN_TO_TATAMI diagnostic, got %+v", d.Diagnostics)
+	}
+}
+
+func hasDiagnostic(ds []Diagnostic, code string) bool {
+	for _, d := range ds {
+		if d.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRingSatinClosesLetterform(t *testing.T) {
@@ -231,11 +255,25 @@ func TestSpineSatinFromCenterline(t *testing.T) {
 	}
 }
 
-func TestSpineSatinRejectsMachineWidth(t *testing.T) {
+func TestSpineSatinClampsMachineWidth(t *testing.T) {
 	spine := Polygon{Rings: [][]Point{{{0, 0}, {0, 20}}}}
-	_, err := Compile([]Region{{ID: "wide", ThreadID: "red", Geometry: spine, Kind: Satin, WidthMM: 20, SpacingMM: .5}}, DefaultProfile())
-	if err == nil || !strings.Contains(err.Error(), "satin width") {
-		t.Fatalf("expected width error, got %v", err)
+	d, err := Compile([]Region{{ID: "wide", ThreadID: "red", Geometry: spine, Kind: Satin, WidthMM: 20, SpacingMM: .5}}, DefaultProfile())
+	if err != nil {
+		t.Fatalf("wide spine satin should clamp, not reject: %v", err)
+	}
+	if !hasDiagnostic(d.Diagnostics, "AUTO_SATIN_WIDTH_CLAMPED") {
+		t.Fatalf("expected AUTO_SATIN_WIDTH_CLAMPED diagnostic, got %+v", d.Diagnostics)
+	}
+	block := d.Plan[0]
+	if block.Kind != Satin {
+		t.Fatalf("expected clamped satin, got %s", block.Kind)
+	}
+	width := distance(block.Stitches[0].Position, block.Stitches[1].Position)
+	if width > 7.05 {
+		t.Fatalf("clamped satin still too wide: %.3f mm", width)
+	}
+	if HasErrors(d.Diagnostics) {
+		t.Fatalf("optimized document must not carry errors: %+v", d.Diagnostics)
 	}
 }
 

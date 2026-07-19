@@ -178,6 +178,11 @@ func estimateSatinWidthMM(r Region) float64 {
 	if len(r.Geometry.Rings) == 0 {
 		return 0
 	}
+	// Ring columns (an "O") sew rail-to-rail, so their width is the rung
+	// distance between the paired rails — not the bounding scanline span.
+	if len(r.Geometry.Rings) == 2 {
+		return ringPairWidthMM(r)
+	}
 	spacing := r.SpacingMM
 	if spacing <= 0 {
 		spacing = 0.4
@@ -200,6 +205,22 @@ func estimateSatinWidthMM(r Region) float64 {
 		return maxA
 	}
 	return math.Min(maxA, maxB)
+}
+
+// ringPairWidthMM estimates the rung width of a two-ring satin column by
+// pairing the rails exactly the way ringSatin sews them.
+func ringPairWidthMM(r Region) float64 {
+	outer, inner := ringClosed(r.Geometry.Rings[0]), ringClosed(r.Geometry.Rings[1])
+	const count = 64
+	outerRail, innerRail := resampleRing(outer, count), resampleRing(inner, count)
+	innerRail = alignRail(outerRail, innerRail)
+	maxW := 0.0
+	for i := 0; i < count; i++ {
+		if w := distance(outerRail[i], innerRail[i]); w > maxW {
+			maxW = w
+		}
+	}
+	return maxW
 }
 
 func maxScanWidth(p Polygon, b Bounds, spacing float64, horizontal bool) float64 {

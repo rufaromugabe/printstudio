@@ -72,31 +72,52 @@ func TestPuffFoamHeightChangesDensity(t *testing.T) {
 	}
 }
 
-func TestPuffRejectsWidePanel(t *testing.T) {
+func TestPuffWidePanelOptimizesToTatami(t *testing.T) {
 	panel := rectangle(-20, -15, 40, 30)
-	_, err := Compile([]Region{{ID: "panel", ThreadID: "navy", Geometry: panel, Kind: Puff, FoamHeightMM: 3}}, DefaultProfile())
-	if err == nil || (!strings.Contains(err.Error(), "panel") && !strings.Contains(err.Error(), "exceeds")) {
-		t.Fatalf("expected panel/width reject, got %v", err)
+	d, err := Compile([]Region{{ID: "panel", ThreadID: "navy", Geometry: panel, Kind: Puff, FoamHeightMM: 3}}, DefaultProfile())
+	if err != nil {
+		t.Fatalf("wide puff panel should optimize, not reject: %v", err)
+	}
+	if len(d.Plan) != 1 || d.Plan[0].Kind != Tatami {
+		t.Fatalf("expected flat tatami conversion, got %+v", d.Plan)
+	}
+	found := false
+	for _, diag := range d.Diagnostics {
+		if diag.Code == "AUTO_PUFF_TO_TATAMI" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected AUTO_PUFF_TO_TATAMI diagnostic, got %+v", d.Diagnostics)
+	}
+	if HasErrors(d.Diagnostics) {
+		t.Fatalf("optimized document must not carry errors: %+v", d.Diagnostics)
 	}
 }
 
-func TestPuffRejectsInvalidFoamHeight(t *testing.T) {
+func TestPuffNormalizesInvalidFoamHeight(t *testing.T) {
 	col := rectangle(-1.5, -10, 3, 20)
 	d, err := Compile([]Region{{ID: "bad", ThreadID: "gold", Geometry: col, Kind: Puff, FoamHeightMM: 5}}, DefaultProfile())
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocked := false
+	normalized := false
 	for _, diag := range d.Diagnostics {
+		if diag.Code == "AUTO_PUFF_FOAM_NORMALIZED" && strings.Contains(diag.Message, "3 mm") {
+			normalized = true
+		}
 		if diag.Code == "PUFF_FOAM_INVALID" {
-			blocked = true
+			t.Fatalf("foam height should be normalized, not rejected: %+v", diag)
 		}
 	}
-	if !blocked {
-		t.Fatalf("expected PUFF_FOAM_INVALID, got %+v", d.Diagnostics)
+	if !normalized {
+		t.Fatalf("expected AUTO_PUFF_FOAM_NORMALIZED, got %+v", d.Diagnostics)
 	}
-	if d.Review.Decision != ReviewBlocked {
-		t.Fatalf("decision %s", d.Review.Decision)
+	if d.Review.Decision == ReviewBlocked {
+		t.Fatalf("normalized foam must not block the design, got %s", d.Review.Decision)
+	}
+	if d.Regions[0].FoamHeightMM != FoamHeight3MM {
+		t.Fatalf("foam height not normalized: %v", d.Regions[0].FoamHeightMM)
 	}
 }
 

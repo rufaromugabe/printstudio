@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"printstudio/api/embroidery"
 )
 
 const embroideryFixture = `{"name":"API TEST","fabricClass":"tshirt","regions":[{"id":"panel","threadId":"black","geometry":{"rings":[[{"x":-10,"y":-5},{"x":10,"y":-5},{"x":10,"y":5},{"x":-10,"y":5}]]},"kind":"tatami","spacingMm":0.4,"stitchLengthMm":3,"edgeUnderlay":true}],"machine":{}}`
@@ -18,7 +20,7 @@ func TestCompileEmbroideryHandler(t *testing.T) {
 		t.Fatalf("status %d: %s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, `"compilerVersion":"0.5.0"`) || !strings.Contains(body, `"svg":"`) || !strings.Contains(body, `"review"`) || !strings.Contains(body, `"tshirt"`) {
+	if !strings.Contains(body, `"compilerVersion":"`+embroidery.CompilerVersion+`"`) || !strings.Contains(body, `"svg":"`) || !strings.Contains(body, `"review"`) || !strings.Contains(body, `"tshirt"`) {
 		t.Fatalf("missing compiler response: %s", body)
 	}
 }
