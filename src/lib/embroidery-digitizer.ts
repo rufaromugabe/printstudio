@@ -31,7 +31,9 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
         const matched=nearestThread(layer.threadId,brand);
         threadLabels[matched.hex]=matched.label;
         const polygons=groupRings(layer.rings);
-        polygons.forEach((polygon,index)=>{
+        const spacingMm=element.embroiderySpacing??.45;
+        let regionIndex=0;
+        for(const polygon of polygons){
           const autoSatin=element.type==="text"&&polygons.length===1&&polygon.length<=2;
           const kind=element.embroideryKind&&element.embroideryKind!=="auto"?element.embroideryKind:(autoSatin?"satin":"tatami");
           const underlay=element.embroideryUnderlay??"auto";
@@ -39,19 +41,25 @@ export async function digitizeElements(elements:DigitizerElement[],view:Digitize
           const rings=layer.units==="mm"
             ? polygon
             : polygon.map(r=>r.map(p=>toPhysical(p,element,view)));
+          // Skip islands thinner than one tatami row — they cannot produce fill stitches.
+          // Measure the exterior only; holes are allowed to be finer.
+          const minFeature=polygonMinFeatureMm(rings[0]?[rings[0]]:[]);
+          if(!satin&&minFeature>0&&minFeature<Math.max(0.8,spacingMm*1.5)){
+            continue;
+          }
           regions.push({
-            id:`${element.id}-${layerIndex}-${index}`,
+            id:`${element.id}-${layerIndex}-${regionIndex++}`,
             threadId:matched.hex,
             geometry:{rings},
             kind,
-            spacingMm:element.embroiderySpacing??.45,
+            spacingMm,
             stitchLengthMm:element.embroideryStitchLength??3,
             angleDegrees:element.embroideryAngle??0,
             edgeUnderlay:underlay==="edge"||(underlay==="auto"&&!satin),
             centerUnderlay:underlay==="center-zigzag"||(underlay==="auto"&&satin),
             zigzagUnderlay:underlay==="center-zigzag"||(underlay==="auto"&&satin),
           });
-        });
+        }
       }
     }catch(error){
       if(element.type==="image"){
@@ -300,6 +308,20 @@ function groupRings(rings:EmbroideryPoint[][]){
     if(container>=0)groups[container].push(ring);else groups.push([ring]);
   }
   return groups;
+}
+function polygonMinFeatureMm(rings:EmbroideryPoint[][]){
+  let min=Infinity;
+  for(const ring of rings){
+    if(ring.length<3)continue;
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const p of ring){
+      minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);
+      maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y);
+    }
+    const feat=Math.min(maxX-minX,maxY-minY);
+    if(feat>0)min=Math.min(min,feat);
+  }
+  return Number.isFinite(min)?min:0;
 }
 function simplify(points:EmbroideryPoint[],tolerance:number){
   if(points.length<4)return points;

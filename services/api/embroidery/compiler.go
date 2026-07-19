@@ -46,6 +46,17 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 			block.Stitches = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, 2.5), "running")
 		case Tatami:
 			block.Stitches, err = tatami(r, minStitch)
+			if err != nil && isEmptyFill(err) {
+				// Micro-islands from image tracing are often thinner than row spacing.
+				// Outline them instead of failing the whole design.
+				block.Stitches = runningPath(r.Geometry.Rings[0], max(r.StitchLengthMM, minStitch), "tatami_fallback_running")
+				block.Kind = Running
+				d.Diagnostics = append(d.Diagnostics, Diagnostic{
+					Severity: Warning, Code: "TATAMI_FALLBACK_RUNNING", RegionID: r.ID,
+					Message: "fill produced no stitches; used running outline for a sub-density region",
+				})
+				err = nil
+			}
 		case Satin:
 			block.Underlay, block.Stitches, err = satin(r, profile)
 		default:
@@ -60,14 +71,20 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 			block.Stitches = pruneShortStitches(block.Stitches, minStitch)
 		}
 		all := append(append([]Stitch{}, block.Underlay...), block.Stitches...)
-		if len(all) > 0 {
-			block.Entry = all[0].Position
-			block.Exit = all[len(all)-1].Position
+		if len(all) == 0 {
+			d.Diagnostics = append(d.Diagnostics, Diagnostic{
+				Severity: Warning, Code: "REGION_SKIPPED_EMPTY", RegionID: r.ID,
+				Message: "region produced no sewable stitches and was skipped",
+			})
+			continue
 		}
+		block.Entry = all[0].Position
+		block.Exit = all[len(all)-1].Position
 		d.Plan = append(d.Plan, block)
 	}
 	d.Plan = routePlan(d.Plan)
-	d.Diagnostics = append(Validate(d), PolicyValidate(d.Regions, fabric)...)
+	d.Diagnostics = append(d.Diagnostics, Validate(d)...)
+	d.Diagnostics = append(d.Diagnostics, PolicyValidate(d.Regions, fabric)...)
 	review := ScoreReview(d.Regions, fabric, d.Diagnostics)
 	d.Review = review
 	if review.Decision == ReviewHuman {
@@ -78,6 +95,21 @@ func CompileWithFabric(regions []Region, profile MachineProfile, fabricClass Fab
 	}
 	if review.Decision == ReviewBlocked && !HasErrors(d.Diagnostics) {
 		d.Diagnostics = append(d.Diagnostics, Diagnostic{Severity: Error, Code: "HUMAN_DIGITIZER_REQUIRED", Message: review.Summary})
+	}
+	// JSON encodes nil slices as null; keep empty arrays for stable clients.
+	if d.Diagnostics == nil {
+		d.Diagnostics = []Diagnostic{}
+	}
+	if d.Plan == nil {
+		d.Plan = []Block{}
+	}
+	for i := range d.Plan {
+		if d.Plan[i].Underlay == nil {
+			d.Plan[i].Underlay = []Stitch{}
+		}
+		if d.Plan[i].Stitches == nil {
+			d.Plan[i].Stitches = []Stitch{}
+		}
 	}
 	return d, nil
 }
@@ -186,6 +218,10 @@ func tatami(r Region, minStitch float64) ([]Stitch, error) {
 		return nil, fmt.Errorf("fill produced no stitches")
 	}
 	return out, nil
+}
+
+func isEmptyFill(err error) bool {
+	return err != nil && err.Error() == "fill produced no stitches"
 }
 
 func max(v, fallback float64) float64 {

@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# local native tool binaries (Windows potrace, etc.)
+/tools/
+
 # debug
 npm-debug.log*
 yarn-debug.log*

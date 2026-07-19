@@ -154,6 +154,20 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 	}
 	rings = fromPolygonPaths(paths)
 
+	var noiseNotes []VectorDiagnostic
+	rings, noiseNotes = dropNoiseRings(rings, rejectFeatureSize("px"))
+	if len(rings) == 0 {
+		out := &VectorContourSet{
+			SourceHash:  hex.EncodeToString(sum[:]),
+			Tracer:      tracer,
+			WidthPx:     w,
+			HeightPx:    h,
+			Units:       "px",
+			Diagnostics: append(noiseNotes, VectorDiagnostic{Severity: "error", Code: "NO_CONTOURS", Message: "no contours remained after removing sub-threshold noise"}),
+		}
+		return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
+	}
+
 	out := &VectorContourSet{
 		Rings:      rings,
 		SourceHash: hex.EncodeToString(sum[:]),
@@ -163,9 +177,9 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 		PathCount:  len(rings),
 		Units:      "px",
 	}
-	out.Diagnostics = QualityGate(rings, "px")
+	out.Diagnostics = append(noiseNotes, QualityGate(rings, "px")...)
 	if HasVectorErrors(out.Diagnostics) {
-		return out, fmt.Errorf("vectorize failed quality gates")
+		return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 	}
 
 	if opt.Placement != nil {
@@ -178,12 +192,24 @@ func Vectorize(ctx context.Context, img image.Image, opt VectorizeOptions) (*Vec
 				mapped[i][j] = toPhysicalMM(lx, ly, *opt.Placement)
 			}
 		}
+		var mmNoise []VectorDiagnostic
+		mapped, mmNoise = dropNoiseRings(mapped, rejectFeatureSize("mm"))
+		if len(mapped) == 0 {
+			out.Rings = nil
+			out.PathCount = 0
+			out.Units = "mm"
+			out.Diagnostics = append(out.Diagnostics, mmNoise...)
+			out.Diagnostics = append(out.Diagnostics, VectorDiagnostic{Severity: "error", Code: "NO_CONTOURS", Message: "no contours remained after removing sub-threshold noise"})
+			return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
+		}
 		out.Rings = mapped
 		out.Units = "mm"
+		out.PathCount = len(mapped)
 		out.MinFeature = minFeatureSize(mapped)
-		out.Diagnostics = QualityGate(mapped, "mm")
+		out.Diagnostics = append(out.Diagnostics, mmNoise...)
+		out.Diagnostics = append(out.Diagnostics, QualityGate(mapped, "mm")...)
 		if HasVectorErrors(out.Diagnostics) {
-			return out, fmt.Errorf("vectorize failed quality gates")
+			return out, fmt.Errorf("%s", firstVectorError(out.Diagnostics))
 		}
 	} else {
 		out.MinFeature = minFeatureSize(rings)
@@ -239,18 +265,7 @@ func toPhysicalMM(localX, localY float64, p VectorizePlacement) VectorPoint {
 func minFeatureSize(rings [][]VectorPoint) float64 {
 	min := math.Inf(1)
 	for _, ring := range rings {
-		if len(ring) < 3 {
-			continue
-		}
-		minX, minY := math.Inf(1), math.Inf(1)
-		maxX, maxY := math.Inf(-1), math.Inf(-1)
-		for _, p := range ring {
-			minX = math.Min(minX, p.X)
-			minY = math.Min(minY, p.Y)
-			maxX = math.Max(maxX, p.X)
-			maxY = math.Max(maxY, p.Y)
-		}
-		feat := math.Min(maxX-minX, maxY-minY)
+		feat := ringFeatureSize(ring)
 		if feat > 0 && feat < min {
 			min = feat
 		}
@@ -259,6 +274,61 @@ func minFeatureSize(rings [][]VectorPoint) float64 {
 		return 0
 	}
 	return min
+}
+
+func rejectFeatureSize(units string) float64 {
+	if units == "px" {
+		return 1
+	}
+	return 0.35
+}
+
+func warnFeatureSize(units string) float64 {
+	if units == "px" {
+		return 2
+	}
+	return 0.8
+}
+
+// dropNoiseRings removes contours whose bbox min-dimension is below reject.
+// Tiny Potrace speckles should not fail the whole design when real paths remain.
+func dropNoiseRings(rings [][]VectorPoint, reject float64) ([][]VectorPoint, []VectorDiagnostic) {
+	if reject <= 0 || len(rings) == 0 {
+		return rings, nil
+	}
+	kept := make([][]VectorPoint, 0, len(rings))
+	dropped := 0
+	for _, ring := range rings {
+		feat := ringFeatureSize(ring)
+		if feat > 0 && feat < reject {
+			dropped++
+			continue
+		}
+		kept = append(kept, ring)
+	}
+	if dropped == 0 {
+		return rings, nil
+	}
+	return kept, []VectorDiagnostic{{
+		Severity: "warning",
+		Code:     "DROPPED_NOISE",
+		Message:  fmt.Sprintf("dropped %d sub-threshold contour(s) below %.2f", dropped, reject),
+	}}
+}
+
+func ringFeatureSize(ring []VectorPoint) float64 {
+	if len(ring) < 3 {
+		return 0
+	}
+	minX, minY := math.Inf(1), math.Inf(1)
+	maxX, maxY := math.Inf(-1), math.Inf(-1)
+	for _, p := range ring {
+		minX = math.Min(minX, p.X)
+		minY = math.Min(minY, p.Y)
+		maxX = math.Max(maxX, p.X)
+		maxY = math.Max(maxY, p.Y)
+	}
+	return math.Min(maxX-minX, maxY-minY)
 }
 
 // QualityGate applies production limits before further processing.
@@ -283,13 +353,10 @@ func QualityGate(rings [][]VectorPoint, units string) []VectorDiagnostic {
 		out = append(out, VectorDiagnostic{Severity: "error", Code: "POINT_EXPLOSION", Message: fmt.Sprintf("%d vertices exceed cap %d", points, MaxPathPoints)})
 	}
 	minFeat := minFeatureSize(rings)
-	warnMM, rejectMM := 0.8, 0.35
-	if units == "px" {
-		warnMM, rejectMM = 2, 1
-	}
-	if minFeat > 0 && minFeat < rejectMM {
-		out = append(out, VectorDiagnostic{Severity: "error", Code: "FEATURE_TOO_SMALL", Message: fmt.Sprintf("smallest feature %.2f %s is below reject threshold %.2f", minFeat, units, rejectMM)})
-	} else if minFeat > 0 && minFeat < warnMM {
+	warnAt, rejectAt := warnFeatureSize(units), rejectFeatureSize(units)
+	if minFeat > 0 && minFeat < rejectAt {
+		out = append(out, VectorDiagnostic{Severity: "error", Code: "FEATURE_TOO_SMALL", Message: fmt.Sprintf("smallest feature %.2f %s is below reject threshold %.2f", minFeat, units, rejectAt)})
+	} else if minFeat > 0 && minFeat < warnAt {
 		out = append(out, VectorDiagnostic{Severity: "warning", Code: "FEATURE_SMALL", Message: fmt.Sprintf("smallest feature %.2f %s may weed/sew poorly", minFeat, units)})
 	}
 	if holes > 0 {
@@ -305,6 +372,18 @@ func HasVectorErrors(ds []VectorDiagnostic) bool {
 		}
 	}
 	return false
+}
+
+func firstVectorError(ds []VectorDiagnostic) string {
+	for _, d := range ds {
+		if d.Severity == "error" {
+			if d.Message != "" {
+				return "vectorize failed quality gates: " + d.Message
+			}
+			return "vectorize failed quality gates"
+		}
+	}
+	return "vectorize failed quality gates"
 }
 
 func signedArea(ring []VectorPoint) float64 {

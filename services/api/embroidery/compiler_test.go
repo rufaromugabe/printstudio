@@ -236,6 +236,31 @@ func TestSpineSatinRejectsMachineWidth(t *testing.T) {
 	}
 }
 
+func TestTatamiEmptyFillFallsBackToRunning(t *testing.T) {
+	// Height below spacing/2 so the scanline loop never runs.
+	p := Polygon{Rings: [][]Point{{{0, 0}, {4, 0}, {4, 0.15}, {0, 0.15}}}}
+	d, err := Compile([]Region{{ID: "sliver", ThreadID: "black", Geometry: p, Kind: Tatami, SpacingMM: .45, StitchLengthMM: 2}}, DefaultProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Plan) != 1 {
+		t.Fatalf("expected fallback plan block, got %d", len(d.Plan))
+	}
+	if d.Plan[0].Kind != Running {
+		t.Fatalf("expected running fallback, got %s", d.Plan[0].Kind)
+	}
+	found := false
+	for _, diag := range d.Diagnostics {
+		if diag.Code == "TATAMI_FALLBACK_RUNNING" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected TATAMI_FALLBACK_RUNNING diagnostic")
+	}
+}
+
 func TestTatamiPrefersNearestSegmentInRow(t *testing.T) {
 	// Dumbbell so mid-height scanlines contain two fill segments.
 	p := Polygon{Rings: [][]Point{{{0, 0}, {4, 0}, {4, 2}, {20, 2}, {20, 0}, {24, 0}, {24, 6}, {20, 6}, {20, 4}, {4, 4}, {4, 6}, {0, 6}}}}

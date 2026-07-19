@@ -53,6 +53,7 @@ type API struct {
 }
 
 func main() {
+	loadDotEnv()
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		resp, err := http.Get("http://127.0.0.1:" + env("PORT", "8080") + "/health/ready")
 		if err != nil || resp.StatusCode != 200 {

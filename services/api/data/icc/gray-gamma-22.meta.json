@@ -1,0 +1,10 @@
+{
+  "id": "gray-gamma-22",
+  "label": "Gray Gamma 2.2",
+  "fileName": "gray-gamma-22.icc",
+  "sha256": "00c0f94e09127520a17dc0e1d9264b5702081d96dbdb1549ee88e3631ce42a9d",
+  "size": 360,
+  "version": 4,
+  "createdAt": "2026-07-18T23:44:08.1596162Z",
+  "description": "Neutral grayscale for mono artwork."
+}

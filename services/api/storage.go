@@ -76,6 +76,16 @@ func (s *ObjectStore) ensureBucket(ctx context.Context) error {
 			}},
 		},
 	})
+	if err != nil {
+		// Some local MinIO builds return 501 for PutBucketCors; uploads can still work via signed URLs.
+		var apiErr interface{ ErrorCode() string }
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NotImplemented" {
+			return nil
+		}
+		if strings.Contains(err.Error(), "NotImplemented") {
+			return nil
+		}
+	}
 	return err
 }
 func (s *ObjectStore) uploadURL(ctx context.Context, key, contentType string, size int64) (string, error) {

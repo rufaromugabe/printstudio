@@ -46,6 +46,7 @@ services:
       retries: 5
   postgres:
     image: postgres:17-alpine
+    ports: ["5433:5432"]
     environment:
       POSTGRES_USER: printstudio
       POSTGRES_PASSWORD: printstudio
@@ -58,6 +59,7 @@ services:
       retries: 10
   redis:
     image: redis:8-alpine
+    ports: ["6379:6379"]
 volumes:
   postgres_data:
   icc_data:

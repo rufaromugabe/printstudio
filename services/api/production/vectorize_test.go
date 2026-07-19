@@ -134,6 +134,47 @@ func TestQualityGatePathExplosion(t *testing.T) {
 	}
 }
 
+func TestDropNoiseRingsKeepsMainContour(t *testing.T) {
+	rings := [][]VectorPoint{
+		{{0, 0}, {40, 0}, {40, 40}, {0, 40}},
+		{{0, 0}, {0.4, 0}, {0.4, 0.4}, {0, 0.4}},
+	}
+	kept, notes := dropNoiseRings(rings, rejectFeatureSize("px"))
+	if len(kept) != 1 {
+		t.Fatalf("want 1 kept ring, got %d", len(kept))
+	}
+	if len(notes) != 1 || notes[0].Code != "DROPPED_NOISE" {
+		t.Fatalf("expected DROPPED_NOISE warning, got %+v", notes)
+	}
+	ds := QualityGate(kept, "px")
+	if HasVectorErrors(ds) {
+		t.Fatalf("unexpected gate errors after noise drop: %+v", ds)
+	}
+}
+
+func TestVectorizeDropsSpeckleNoise(t *testing.T) {
+	potrace := os.Getenv("POTRACE_BIN")
+	if potrace == "" {
+		var err error
+		potrace, err = exec.LookPath("potrace")
+		if err != nil {
+			t.Skip("potrace not installed")
+		}
+	}
+	img := solidSquare(120, 20, 20, 70)
+	// Sub-pixel-ish speckles that Potrace may turn into tiny rings.
+	img.SetNRGBA(2, 2, color.NRGBA{A: 255})
+	img.SetNRGBA(3, 2, color.NRGBA{A: 255})
+	img.SetNRGBA(110, 110, color.NRGBA{A: 255})
+	set, err := Vectorize(context.Background(), img, VectorizeOptions{Tools: NativeTools{Potrace: potrace}})
+	if err != nil {
+		t.Fatalf("vectorize: %v diagnostics=%+v", err, set)
+	}
+	if set.PathCount < 1 {
+		t.Fatal("expected main contour to survive")
+	}
+}
+
 func solidSquare(size, x0, y0, side int) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	for y := y0; y < y0+side; y++ {
